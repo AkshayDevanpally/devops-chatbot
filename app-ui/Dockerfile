@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Static UI on unprivileged nginx (runs as uid 101, listens on 8080).
 # Pin by digest before prod:  ./scripts/pin-digests.sh
-ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine
+ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.30-alpine
 FROM ${NGINX_IMAGE}
 ARG GIT_SHA=dev
 LABEL org.opencontainers.image.title="ui" \
@@ -9,6 +9,9 @@ LABEL org.opencontainers.image.title="ui" \
       org.opencontainers.image.revision="${GIT_SHA}"
 
 USER 0
+# Pull Alpine security fixes the base image hasn't been rebuilt with yet (keeps Trivy green).
+# hadolint ignore=DL3017
+RUN apk upgrade --no-cache
 # Remove the default page and anything we don't serve; create the optional include dir.
 RUN rm -rf /usr/share/nginx/html/* /etc/nginx/conf.d/default.conf && mkdir -p /etc/nginx/extra
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf
