@@ -8,7 +8,7 @@ LABEL org.opencontainers.image.title="ui" \
       org.opencontainers.image.source="https://github.com/YOUR_USER/devops-chatbot" \
       org.opencontainers.image.revision="${GIT_SHA}"
 
-USER root
+USER 0
 # Remove the default page and anything we don't serve; create the optional include dir.
 RUN rm -rf /usr/share/nginx/html/* /etc/nginx/conf.d/default.conf && mkdir -p /etc/nginx/extra
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf

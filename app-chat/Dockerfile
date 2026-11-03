@@ -6,6 +6,7 @@ ARG PYTHON_IMAGE=python:3.12-slim
 FROM ${PYTHON_IMAGE} AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /venv
+WORKDIR /build
 COPY requirements.txt .
 RUN /venv/bin/pip install -r requirements.txt
 
