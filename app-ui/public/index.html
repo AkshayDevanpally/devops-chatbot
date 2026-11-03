@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen Chat</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand">Qwen<span>Ops</span></div>
+    <nav><a href="/">Chat</a><a href="/pipeline/">Pipeline</a><a href="/dev/">Be a Dev</a><a href="/pulse/">Pulse</a></nav>
+    <div class="env">local</div>
+  </header>
+  <main>
+    <section id="boot">
+      <h2>Getting resources ready…</h2>
+      <p class="note">Waking the server and loading the model. This takes a moment on first use.</p>
+      <div class="steps">
+        <div class="step" data-s="waking">Waking hardware</div>
+        <div class="step" data-s="cluster_ready">Cluster ready</div>
+        <div class="step" data-s="model_loading">Loading model</div>
+        <div class="step" data-s="ready">Ready</div>
+      </div>
+    </section>
+
+    <section id="chat" hidden>
+      <div class="banner" id="guest">You're in guest mode: the first 50 users have history saved, so your chats won't be stored.</div>
+      <div class="banner" id="saved">Your last 15 chats are saved.</div>
+      <div id="log"></div>
+      <form class="composer" id="composer">
+        <input id="msg" maxlength="2000" autocomplete="off" placeholder="Ask anything…" required>
+        <button id="send">Send</button>
+      </form>
+    </section>
+  </main>
+  <script src="/config.js"></script>
+  <script src="/common.js"></script>
+  <script src="/chat.js"></script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+# Every namespace enforces the "restricted" Pod Security Standard.
+# ai: one shared Ollama (three model copies won't fit in 8 GB). data: one Postgres, a database + user per env.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chatbot-dev
+  labels:
+    chatbot.io/tier: app
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chatbot-qa
+  labels:
+    chatbot.io/tier: app
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chatbot-prod
+  labels:
+    chatbot.io/tier: app
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai
+  labels:
+    chatbot.io/tier: shared
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data
+  labels:
+    chatbot.io/tier: shared
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+# monitoring: one private Prometheus that feeds the Pulse page.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    chatbot.io/tier: shared
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

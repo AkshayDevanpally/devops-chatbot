@@ -1,0 +1,122 @@
+# Quick local test before Kubernetes:  cp .env.example .env  (edit secrets)  &&  docker compose up --build
+# Open http://localhost:8080
+
+x-hardened: &hardened
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *hardened
+    image: postgres:16-alpine
+    cap_add: ["CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"]   # entrypoint drops to the postgres user
+    environment:
+      POSTGRES_DB: chat
+      POSTGRES_USER: chat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=40"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat -d chat"]
+      interval: 5s
+      retries: 10
+    mem_limit: 256m
+
+  migrate:
+    build: { context: ./app-chat, args: { GIT_SHA: "${GIT_SHA:-dev}" } }
+    image: localhost:5000/chat-api:${GIT_SHA:-dev}
+    command: ["python", "-m", "app.migrate"]
+    environment: &api_env
+      DATABASE_URL: postgresql://chat:${POSTGRES_PASSWORD}@postgres:5432/chat
+      SESSION_SECRET: ${SESSION_SECRET:?set in .env}
+      OLLAMA_URL: http://ollama:11434
+      MODEL: ${MODEL:-qwen2.5:0.5b}
+      APP_ENV: local
+      PROMETHEUS_URL: http://prometheus:9090
+    depends_on: { postgres: { condition: service_healthy } }
+    networks: [backend]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    restart: "no"
+
+  ollama:
+    <<: *hardened
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.30.10}
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
+      OLLAMA_NUM_PARALLEL: "2"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    volumes: ["models:/root/.ollama"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    networks: [backend, egress]     # egress only to download the model
+    mem_limit: 2g
+
+  ollama-pull:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.30.10}
+    entrypoint: ["/bin/sh", "-c", "ollama pull \"$$MODEL\""]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      MODEL: ${MODEL:-qwen2.5:0.5b}
+    depends_on: [ollama]
+    networks: [backend]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    restart: on-failure
+
+  chat-api:
+    <<: *hardened
+    # Same build as migrate, so compose builds locally instead of pulling from the
+    # registry (which only exists after `make registry`).
+    build: { context: ./app-chat, args: { GIT_SHA: "${GIT_SHA:-dev}" } }
+    image: localhost:5000/chat-api:${GIT_SHA:-dev}
+    environment: *api_env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      ollama: { condition: service_started }
+    networks: [backend]
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/healthz')"]
+      interval: 10s
+
+  # Feeds the Pulse page. Only on the internal network, no published port.
+  # Compose has no kubelet, so Pulse shows traffic/chat numbers here but not CPU/memory.
+  prometheus:
+    <<: *hardened
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus",
+              "--storage.tsdb.retention.time=24h"]
+    volumes:
+      - ./monitoring/prometheus-compose.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    networks: [backend]
+    read_only: true
+    mem_limit: 256m
+
+  ui:
+    <<: *hardened
+    build: { context: ./app-ui, args: { GIT_SHA: "${GIT_SHA:-dev}" } }
+    image: localhost:5000/ui:${GIT_SHA:-dev}
+    ports: ["127.0.0.1:8080:8080"]          # only reachable from this machine
+    volumes: ["./app-ui/nginx/compose-api-proxy.conf:/etc/nginx/extra/api.conf:ro"]
+    depends_on: [chat-api]
+    networks: [backend, frontend]       # internal networks can't publish ports
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 64m
+
+networks:
+  backend: { internal: true }   # no internet from app containers
+  egress: {}
+  frontend: {}
+
+volumes:
+  pgdata: {}
+  models: {}
+  promdata: {}

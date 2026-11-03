@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Be a Dev</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand">Qwen<span>Ops</span></div>
+    <nav><a href="/">Chat</a><a href="/pipeline/">Pipeline</a><a href="/dev/">Be a Dev</a><a href="/pulse/">Pulse</a></nav>
+    <div class="env">local</div>
+  </header>
+  <main>
+    <h2>Be a developer for a minute</h2>
+    <p class="note">Pick a colour. It goes through the CI/CD pipeline and lands on the <b>dev</b> environment.</p>
+    <div class="swatches" id="swatches"></div>
+    <button id="ship" disabled>Ship it to dev</button>
+    <p class="note" id="result"></p>
+  </main>
+  <script src="/config.js"></script>
+  <script src="/common.js"></script>
+  <script src="/dev/dev.js"></script>
+</body>
+</html>

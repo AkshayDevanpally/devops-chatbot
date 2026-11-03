@@ -1,0 +1,201 @@
+# Private Prometheus for the Pulse page. Not on the ingress: only chat-api pods may query it,
+# and the browser only ever sees the fixed results chat-api returns from /api/pulse.
+# Scrapes: chat-api metrics (port 9100) in the app namespaces, plus kubelet resource metrics
+# (CPU/memory per container and for the node). Data lives 24 h in an emptyDir: a restart
+# clears history, which is fine for a live view and keeps the disk footprint fixed.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: prometheus, namespace: monitoring }
+automountServiceAccountToken: false   # mounted only on the Prometheus pod below
+---
+# Read-only and narrow: find the node and read kubelet /metrics/*. Deliberately NOT
+# nodes/proxy, which is broader than it looks (it can reach kubelet exec endpoints).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: prometheus-pulse }
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list, watch]
+  - apiGroups: [""]
+    resources: [nodes/metrics]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: prometheus-pulse }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: prometheus-pulse }
+subjects: [{ kind: ServiceAccount, name: prometheus, namespace: monitoring }]
+---
+# Pod discovery only in the three app namespaces (a Role each, not cluster-wide).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: prometheus-discovery, namespace: chatbot-dev }
+rules: [{ apiGroups: [""], resources: [pods], verbs: [list, watch] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: prometheus-discovery, namespace: chatbot-dev }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: prometheus-discovery }
+subjects: [{ kind: ServiceAccount, name: prometheus, namespace: monitoring }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: prometheus-discovery, namespace: chatbot-qa }
+rules: [{ apiGroups: [""], resources: [pods], verbs: [list, watch] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: prometheus-discovery, namespace: chatbot-qa }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: prometheus-discovery }
+subjects: [{ kind: ServiceAccount, name: prometheus, namespace: monitoring }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: prometheus-discovery, namespace: chatbot-prod }
+rules: [{ apiGroups: [""], resources: [pods], verbs: [list, watch] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: prometheus-discovery, namespace: chatbot-prod }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: prometheus-discovery }
+subjects: [{ kind: ServiceAccount, name: prometheus, namespace: monitoring }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: prometheus-config, namespace: monitoring }
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      scrape_timeout: 10s
+
+    scrape_configs:
+      # Request, chat and token metrics from every chat-api pod.
+      - job_name: chat-api
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces: { names: [chatbot-dev, chatbot-qa, chatbot-prod] }
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            regex: "true"
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            regex: metrics
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_phase]
+            regex: Running
+            action: keep
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      # CPU + memory per container and for the node (small endpoint, cheap to scrape).
+      - job_name: kubelet
+        scheme: https
+        metrics_path: /metrics/resource
+        authorization: { credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token }
+        tls_config: { insecure_skip_verify: true }   # k3s kubelet serves a self-signed certificate
+        kubernetes_sd_configs: [{ role: node }]
+
+      # Only the host's total CPU cores and memory, for the "% of host" tiles.
+      - job_name: kubelet-capacity
+        scheme: https
+        metrics_path: /metrics/cadvisor
+        scrape_interval: 60s
+        authorization: { credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token }
+        tls_config: { insecure_skip_verify: true }
+        kubernetes_sd_configs: [{ role: node }]
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: machine_(cpu_cores|memory_bytes)
+            action: keep
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels: { app.kubernetes.io/name: prometheus }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: prometheus }
+    spec:
+      serviceAccountName: prometheus
+      automountServiceAccountToken: true   # needed for discovery + kubelet; RBAC above is read-only
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+        appArmorProfile: { type: Localhost, localhostProfile: k8s-chatbot }   # scripts/01a-apparmor.sh
+      containers:
+        - name: prometheus
+          # Check https://github.com/prometheus/prometheus/releases before bumping.
+          image: prom/prometheus:v3.5.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=24h
+            - --storage.tsdb.retention.size=300MB
+          ports: [{ name: http, containerPort: 9090 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { cpu: 500m, memory: 384Mi }
+          readinessProbe:
+            httpGet: { path: /-/ready, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /-/healthy, port: http }
+            periodSeconds: 20
+          volumeMounts:
+            - { name: config, mountPath: /etc/prometheus, readOnly: true }
+            - { name: data, mountPath: /prometheus }
+      volumes:
+        - name: config
+          configMap: { name: prometheus-config }
+        - name: data
+          emptyDir: { sizeLimit: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: prometheus, namespace: monitoring }
+spec:
+  selector: { app.kubernetes.io/name: prometheus }
+  ports: [{ name: http, port: 9090, targetPort: http }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: prometheus-allow, namespace: monitoring }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Only chat-api pods may query Prometheus (for /api/pulse).
+    - from:
+        - namespaceSelector: { matchLabels: { chatbot.io/tier: app } }
+          podSelector: { matchLabels: { app.kubernetes.io/component: api } }
+      ports: [{ port: 9090 }]
+  egress:
+    # Scrape chat-api metrics.
+    - to:
+        - namespaceSelector: { matchLabels: { chatbot.io/tier: app } }
+          podSelector: { matchLabels: { app.kubernetes.io/component: api } }
+      ports: [{ port: 9100 }]
+    # Kubernetes API (discovery) and the kubelet (resource metrics). Both listen on the
+    # node's own IP, so allow only those ports, only to private ranges.
+    - to:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+      ports: [{ port: 443 }, { port: 6443 }, { port: 10250 }]

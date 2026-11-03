@@ -1,0 +1,20 @@
+env: prod
+host: chatbot.local
+theme: teal
+
+api:
+  replicas: 2
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "1", memory: 320Mi }   # 4 pods during a rolling update must fit the 1536Mi quota
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 3        # local ceiling; beyond this, Phase 6 bursts to AWS
+    cpuPercent: 70
+
+ui:
+  replicas: 2
+
+pdb:
+  enabled: true

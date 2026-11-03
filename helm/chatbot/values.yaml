@@ -1,0 +1,42 @@
+# Defaults. Environment files override only what differs. The image tag is set by the
+# pipeline/script (--set image.tag=<git sha>), so the same image is promoted dev -> qa -> prod.
+env: dev
+host: dev.chatbot.local
+theme: teal
+
+image:
+  registry: localhost:5000
+  tag: dev
+  pullPolicy: IfNotPresent
+
+model: qwen2.5:0.5b
+ollamaUrl: http://ollama.ai.svc.cluster.local:11434
+# Private Prometheus behind the Pulse page (k8s/platform/50-prometheus.yaml). "" disables Pulse data.
+prometheusUrl: http://prometheus.monitoring.svc.cluster.local:9090
+cookieSecure: false          # true once TLS is on (cert-manager, Phase 3.4)
+
+# Secret created by scripts/05-secrets.sh (later: External Secrets Operator).
+existingSecret: chat-api-secrets
+
+api:
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  hpa:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    cpuPercent: 70
+
+ui:
+  replicas: 1
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { cpu: 100m, memory: 64Mi }
+
+pdb:
+  enabled: false
+
+ingress:
+  className: traefik

@@ -1,0 +1,34 @@
+"""All configuration comes from environment variables (12-factor)."""
+import os
+
+
+def _read_secret(name: str, default: str = "") -> str:
+    """Read NAME from env, or from the file named in NAME_FILE (mounted secret)."""
+    file_path = os.getenv(f"{name}_FILE")
+    if file_path and os.path.exists(file_path):
+        with open(file_path, encoding="utf-8") as f:
+            return f.read().strip()
+    return os.getenv(name, default)
+
+
+DATABASE_URL = _read_secret("DATABASE_URL")
+SESSION_SECRET = _read_secret("SESSION_SECRET")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
+MODEL = os.getenv("MODEL", "qwen2.5:0.5b")
+APP_ENV = os.getenv("APP_ENV", "local")
+# Private Prometheus for the Pulse page. Empty = Pulse shows "not connected".
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "")
+
+MAX_USERS = 50            # enforced in the database too
+MAX_CHATS_PER_USER = 15   # enforced in the database too
+MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", "2000"))
+CONTEXT_EXCHANGES = int(os.getenv("CONTEXT_EXCHANGES", "4"))
+RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "10"))
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+
+ALLOWED_THEMES = ["teal", "indigo", "rose", "amber", "emerald", "slate"]
+
+if not SESSION_SECRET or len(SESSION_SECRET) < 32:
+    raise RuntimeError("SESSION_SECRET must be set and at least 32 characters")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL must be set")

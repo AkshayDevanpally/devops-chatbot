@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pipeline Factory</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand">Qwen<span>Ops</span></div>
+    <nav><a href="/">Chat</a><a href="/pipeline/">Pipeline</a><a href="/dev/">Be a Dev</a><a href="/pulse/">Pulse</a></nav>
+    <div class="env">local</div>
+  </header>
+  <main>
+    <h2>CI/CD factory</h2>
+    <p class="note" id="mode">Demo mode: a simulated build. Live Jenkins events connect in Phase 8.</p>
+    <div class="belt"><div class="box" id="box"></div></div>
+    <div class="factory" id="factory"></div>
+    <button id="run">Run demo build</button>
+    <div id="drawer">
+      <div class="bar"><span id="drawer-title">Logs</span><span id="drawer-close" class="link">close</span></div>
+      <pre id="drawer-log"></pre>
+    </div>
+  </main>
+  <script src="/config.js"></script>
+  <script src="/common.js"></script>
+  <script src="/pipeline/pipeline.js"></script>
+</body>
+</html>

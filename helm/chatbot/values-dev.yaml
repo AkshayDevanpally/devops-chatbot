@@ -1,0 +1,3 @@
+env: dev
+host: dev.chatbot.local
+theme: indigo        # the "Be a Dev" page changes this value in the config repo (Phase 8)

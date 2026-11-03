@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ui
+  labels: {{- include "chatbot.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+# Per-environment theme. Same image everywhere; only this config differs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ui-theme
+  labels: {{- include "chatbot.labels" . | nindent 4 }}
+data:
+  theme.json: {{ dict "color" .Values.theme "env" .Values.env | toJson | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  labels: {{- include "chatbot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+spec:
+  replicas: {{ .Values.ui.replicas }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app.kubernetes.io/component: ui }
+  template:
+    metadata:
+      labels: {{- include "chatbot.labels" . | nindent 8 }}
+        app.kubernetes.io/component: ui
+      annotations:
+        # restart pods when the theme changes
+        checksum/theme: {{ .Values.theme | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: ui
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "chatbot.podSecurityContext" . | nindent 8 }}
+        runAsUser: 101
+        runAsGroup: 101
+      containers:
+        - name: ui
+          image: "{{ .Values.image.registry }}/ui:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext: {{- include "chatbot.containerSecurityContext" . | nindent 12 }}
+          resources: {{- toYaml .Values.ui.resources | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: theme, mountPath: /usr/share/nginx/html/theme.json, subPath: theme.json, readOnly: true }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 32Mi }
+        - name: theme
+          configMap: { name: ui-theme }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  labels: {{- include "chatbot.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/component: ui }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+{{- if .Values.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ui
+  labels: {{- include "chatbot.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/component: ui }
+{{- end }}

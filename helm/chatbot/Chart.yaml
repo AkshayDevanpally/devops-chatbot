@@ -1,0 +1,6 @@
+apiVersion: v2
+name: chatbot
+description: Qwen chat API + UI. One chart, three environments (values-dev/qa/prod.yaml).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

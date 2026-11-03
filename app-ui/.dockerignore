@@ -1,0 +1,4 @@
+*.md
+Dockerfile
+.dockerignore
+nginx/compose-api-proxy.conf
