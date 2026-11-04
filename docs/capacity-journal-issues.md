@@ -15,6 +15,9 @@ that shipped the pages to prod, and led to a real fix for dropped requests durin
 | 7 | Journal statuses and emojis guessed wrong | Generator | Fixed |
 | 8 | hadolint flagged the named build context | Build | Fixed |
 | 9 | Build #4 "Ship to prod" failed: requests dropped during every rollout | Deploy | Fixed |
+| 10 | Mistake: a post-deploy failure was dismissed as a timing blip | Process | Fixed |
+| 11 | A build waiting for prod approval blocked the next build | Pipeline | Open (worked around) |
+| 12 | Build #4 went red although prod was deployed, and nothing rolled back | Pipeline | Open |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -161,3 +164,52 @@ not just test requests.
 
 **Lesson:** a flaky check right after a deploy is often a real, user-facing gap. Measure it under load before
 calling it a fluke.
+
+### Issue 10 — Mistake: a post-deploy failure was dismissed as a timing blip
+
+**What happened:** when `make verify` first failed "API liveness" right after a dev deploy (Issue 5), the next three
+health calls returned 200 and a rerun passed, so it was written down as "the old pod was shutting down" and left
+alone. The same gap then failed the prod verify in build #4 (Issue 9).
+
+**Why it was wrong:** a failure that only happens right after a deploy is not random. It happens on every deploy;
+the test just catches it some of the time. And "API liveness" never touches the model, so the old-pod explanation
+didn't fully fit; that mismatch was the clue.
+
+**Fix:** measured instead of guessing (requests during rollouts: 5/580 failed before, 0/760 twice after), fixed the
+rollout itself (Issue 9), and upgraded Issue 5 from "explained" to "fixed".
+
+**Lesson:** "it passed on rerun" is not an explanation. If a failure is tied to an event (a deploy, a restart),
+reproduce it under load before closing it.
+
+### Issue 11 — A build waiting for prod approval blocked the next build
+
+**Symptom:** after pushing the new pages, no new build started. Build #3 (from the docs-only push) was still
+waiting at "Ship to prod":
+
+```text
+#3 PAUSED_PENDING_INPUT [('Deploy dev', 'SUCCESS'), ('Deploy qa', 'SUCCESS'), ('Ship to prod', 'PAUSED_PENDING_INPUT')]
+queue: []
+```
+
+**Cause:** the job allows one build at a time (`disableConcurrentBuilds`), and the approval waits up to a day.
+Every push that isn't shipped to prod holds up all later pushes until someone approves or aborts it.
+
+**Workaround:** build #3 was aborted by hand (prod untouched; build #4 contained the same commit and more) and a new
+build was started.
+
+**Possible fix (open):** make a newer build supersede an older one that is still waiting for approval, e.g.
+Jenkins `milestone` steps around the approval, or a much shorter approval timeout for builds that are not the
+latest commit.
+
+### Issue 12 — Build #4 went red although prod was deployed, and nothing rolled back
+
+**What happened:** in "Ship to prod", `helm upgrade --atomic` succeeded, so prod was running the new release; then
+`make verify` failed one check and the build was marked FAILURE. The build said "failed", but the change was
+live, and it stayed live: verify runs after the deploy, outside Helm's `--atomic` rollback.
+
+**Risk:** if a verify failure is real, a broken release stays in prod until someone notices the red build and
+rolls back by hand (`helm rollback chatbot-prod <rev> -n chatbot-prod`).
+
+**Possible fix (open):** on a verify failure in prod, roll back to the previous Helm revision automatically and
+then fail the build, so "red" always means "prod is on the last good release". The steadiness wait added in
+Issue 9 makes false alarms that would trigger such a rollback much less likely.

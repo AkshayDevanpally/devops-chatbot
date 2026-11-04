@@ -228,13 +228,14 @@ def classify(title: str, text: str, note: str | None) -> tuple[str, str, str]:
     t, hay = title.lower(), f"{title}\n{text}".lower()
     title_kinds = [("🎉", "success", r"\bsuccess\b"), *KINDS]
     emoji, kind = next(((e, k) for e, k, p in title_kinds if re.search(p, t)), (None, None))
-    if emoji is None:
-        emoji, kind = next(((e, k) for e, k, p in KINDS if re.search(p, hay)), ("🐞", "issue"))
+    if emoji is None:   # body text: "false alarm" mentioned in passing doesn't make the entry one
+        body_kinds = [k for k in KINDS if k[1] != "false alarm"]
+        emoji, kind = next(((e, k) for e, k, p in body_kinds if re.search(p, hay)), ("🐞", "issue"))
     if "success" in t or "✅" in title:
         status = "passed"
     elif note:                                    # the doc's own summary table said so
         status = normalize_status(note)
-    elif "false alarm" in hay or "ℹ️" in title:
+    elif "false alarm" in t or "ℹ️" in title:
         status = "false-alarm"
     elif re.search(r"\(open\b", t):
         status = "open"
