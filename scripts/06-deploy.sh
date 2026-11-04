@@ -9,7 +9,8 @@ ENV="${1:?usage: $0 <dev|qa|prod> [tag]}"
 TAG="${2:-$(cat .last-tag 2>/dev/null || true)}"
 [[ -n $TAG ]] || { echo "no tag: run ./scripts/03-build-push.sh first"; exit 1; }
 
-if [[ $ENV == prod ]]; then
+# Jenkins sets PROD_APPROVED=yes only after someone approves the "Ship to prod" stage.
+if [[ $ENV == prod && ${PROD_APPROVED:-} != yes ]]; then
   read -r -p "Deploy $TAG to PROD? type 'yes': " ok
   [[ $ok == yes ]] || { echo "aborted"; exit 1; }
 fi

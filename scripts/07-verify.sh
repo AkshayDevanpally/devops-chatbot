@@ -6,7 +6,8 @@ ENV="${1:-dev}"; NS="chatbot-$ENV"
 case $ENV in prod) HOST=chatbot.local ;; *) HOST="$ENV.chatbot.local" ;; esac
 pass=0; fail=0
 # HTTPS against the local CA (make tls). --resolve so it works without /etc/hosts entries.
-CA="$(dirname "$0")/../certs/chatbot-local-ca.crt"
+# CA_FILE: set by the Jenkins agent (the repo's certs/ folder is git-ignored, so a clean checkout lacks it).
+CA="${CA_FILE:-$(dirname "$0")/../certs/chatbot-local-ca.crt}"
 URL="https://$HOST"
 curl() { command curl --cacert "$CA" --resolve "$HOST:443:127.0.0.1" --resolve "$HOST:80:127.0.0.1" "$@"; }
 [[ -s $CA ]] || { echo "missing $CA: run make tls first"; exit 1; }

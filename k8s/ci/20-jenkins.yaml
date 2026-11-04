@@ -1,0 +1,230 @@
+# Jenkins controller. Applied by scripts/09-jenkins.sh, which fills in __JENKINS_IMAGE__ and
+# __CONFIG_HASH__ (a config change restarts the pod so JCasC re-applies it).
+# The controller has 0 executors: every build runs on the host agent.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: jenkins, namespace: ci }
+automountServiceAccountToken: false   # the controller never talks to the Kubernetes API
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: jenkins-home, namespace: ci }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: { requests: { storage: 10Gi } }
+---
+# Jenkins Configuration as Code. Anything changed in the UI is overwritten on the next restart.
+# ${admin-password} and ${github-deploy-key} are files in /run/secrets (secret jenkins-secrets);
+# ${GIT_REPO_URL} and ${GIT_BRANCH} come from the jenkins-settings ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: jenkins-casc, namespace: ci }
+data:
+  jenkins.yaml: |
+    jenkins:
+      systemMessage: "QwenOps CI. Configured as code (k8s/ci/20-jenkins.yaml): UI changes are reset on restart."
+      numExecutors: 0
+      mode: EXCLUSIVE
+      markupFormatter: plainText
+      disableRememberMe: true
+      securityRealm:
+        local:
+          allowsSignup: false
+          users:
+            - id: admin
+              password: "${admin-password}"
+      authorizationStrategy:
+        loggedInUsersCanDoAnything:
+          allowAnonymousRead: false
+      nodes:
+        - permanent:
+            name: host-agent
+            nodeDescription: "Build agent on the k3s host (Docker, Trivy, hadolint, Helm)"
+            labelString: docker
+            numExecutors: 1
+            mode: EXCLUSIVE
+            remoteFS: /var/lib/jenkins-agent
+            launcher:
+              inbound:
+                webSocket: true
+            retentionStrategy: always
+    security:
+      gitHostKeyVerificationConfiguration:
+        sshHostKeyVerificationStrategy:
+          manuallyProvidedKeyVerificationStrategy:
+            # GitHub's published key, fingerprint SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU
+            approvedHostKeys: |-
+              github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+    unclassified:
+      location:
+        url: https://jenkins.chatbot.local/
+    credentials:
+      system:
+        domainCredentials:
+          - credentials:
+              - basicSSHUserPrivateKey:
+                  scope: GLOBAL
+                  id: github-deploy-key
+                  username: git
+                  description: "Read-only GitHub deploy key"
+                  privateKeySource:
+                    directEntry:
+                      privateKey: "${github-deploy-key}"
+    jobs:
+      - script: |
+          pipelineJob('chatbot') {
+            description('Build, test, scan and promote the chatbot. Pipeline: Jenkinsfile in the repo.')
+            logRotator { numToKeep(30) }
+            properties {
+              disableConcurrentBuilds()
+              pipelineTriggers {
+                triggers {
+                  pollSCM { scmpoll_spec('H/2 * * * *') }   // GitHub can't reach this server for webhooks
+                }
+              }
+            }
+            definition {
+              cpsScm {
+                scm {
+                  git {
+                    remote {
+                      url('${GIT_REPO_URL}')
+                      credentials('github-deploy-key')
+                    }
+                    branch('*/${GIT_BRANCH}')
+                  }
+                }
+                scriptPath('Jenkinsfile')
+                lightweight(true)
+              }
+            }
+          }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+  namespace: ci
+  labels: { app.kubernetes.io/name: jenkins }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }          # RWO volume: never two controllers at once
+  selector: { matchLabels: { app.kubernetes.io/name: jenkins } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: jenkins }
+      annotations:
+        chatbot.io/config-hash: "__CONFIG_HASH__"
+    spec:
+      serviceAccountName: jenkins
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+        appArmorProfile: { type: Localhost, localhostProfile: k8s-chatbot }   # scripts/01a-apparmor.sh
+      containers:
+        - name: jenkins
+          image: __JENKINS_IMAGE__
+          env:
+            - name: JAVA_OPTS
+              value: >-
+                -Djenkins.install.runSetupWizard=false
+                -Djava.io.tmpdir=/tmp
+                -XX:MaxRAMPercentage=60
+            - { name: CASC_JENKINS_CONFIG, value: /var/jenkins_config/jenkins.yaml }
+          envFrom: [{ configMapRef: { name: jenkins-settings } }]
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 200m, memory: 768Mi }
+            limits: { cpu: 1500m, memory: 1536Mi }
+          startupProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 5
+            failureThreshold: 72          # first start unpacks plugins: allow 6 minutes
+          readinessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - { name: home, mountPath: /var/jenkins_home }
+            - { name: casc, mountPath: /var/jenkins_config, readOnly: true }
+            - { name: secrets, mountPath: /run/secrets, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: home
+          persistentVolumeClaim: { claimName: jenkins-home }
+        - name: casc
+          configMap: { name: jenkins-casc }
+        - name: secrets
+          secret: { secretName: jenkins-secrets, defaultMode: 0400 }
+        - name: tmp
+          emptyDir: { sizeLimit: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: jenkins, namespace: ci }
+spec:
+  selector: { app.kubernetes.io/name: jenkins }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jenkins
+  namespace: ci
+  annotations:
+    cert-manager.io/cluster-issuer: chatbot-local-ca
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.middlewares: ci-hsts@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [jenkins.chatbot.local]
+      secretName: jenkins-tls
+  rules:
+    - host: jenkins.chatbot.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: jenkins, port: { name: http } } }
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: { name: hsts, namespace: ci }
+spec:
+  headers:
+    stsSeconds: 86400
+---
+# In: only Traefik (the UI and the host agent's WebSocket both come through the HTTPS ingress).
+# Out: GitHub over SSH/HTTPS and the Jenkins update site. Public addresses only, no private ranges.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: jenkins-allow
+  namespace: ci
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: jenkins } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: traefik } }
+      ports: [{ port: 8080 }]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports: [{ protocol: TCP, port: 22 }, { protocol: TCP, port: 443 }]

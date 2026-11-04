@@ -1,0 +1,9 @@
+# Kept short on purpose: every plugin is attack surface. Versions resolve at image build time;
+# the image tag includes a hash of this file, so a rebuild with new plugins gets a new tag.
+configuration-as-code
+job-dsl
+workflow-aggregator
+git
+ssh-credentials
+timestamper
+pipeline-stage-view

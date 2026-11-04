@@ -1,0 +1,76 @@
+# The identity the build agent deploys with. It can manage what the Helm chart creates in the three
+# app namespaces and nothing else: no cluster-wide access, no other namespaces, no RBAC changes.
+# (It can read the app namespaces' secrets, because Helm stores releases as secrets there.)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-deployer
+  namespace: ci
+automountServiceAccountToken: false
+---
+# Long-lived token for the agent's kubeconfig. Revoke it by deleting this secret and re-running
+# make jenkins + make jenkins-agent.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jenkins-deployer-token
+  namespace: ci
+  annotations:
+    kubernetes.io/service-account.name: jenkins-deployer
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: chatbot-deployer
+rules:
+  # Helm release storage + chart resources
+  - apiGroups: [""]
+    resources: [secrets, configmaps, services, serviceaccounts]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [traefik.io]
+    resources: [middlewares]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # helm --wait, and make verify's test pods (PSA + network probes)
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: jenkins-deployer, namespace: chatbot-dev }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: chatbot-deployer }
+subjects: [{ kind: ServiceAccount, name: jenkins-deployer, namespace: ci }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: jenkins-deployer, namespace: chatbot-qa }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: chatbot-deployer }
+subjects: [{ kind: ServiceAccount, name: jenkins-deployer, namespace: ci }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: jenkins-deployer, namespace: chatbot-prod }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: chatbot-deployer }
+subjects: [{ kind: ServiceAccount, name: jenkins-deployer, namespace: ci }]

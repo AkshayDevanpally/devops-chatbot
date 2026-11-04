@@ -1,0 +1,8 @@
+# Accepted findings for the Jenkins controller image. Each one MUST have a reason and an expiry:
+# after the date Trivy reports it again and the build fails, forcing a re-check.
+
+# guava 33.7.1 inside jenkins.war (Jenkins core). Fixed in guava 33.7.2, but no Jenkins LTS ships it
+# yet (2.580.2 is the newest LTS as of 2026-11-04). Impact: denial of service. The controller is only
+# reachable through the authenticated HTTPS ingress, has no executors and no API token.
+# Action: bump the FROM line to the next LTS and delete this entry.
+CVE-2026-102554 exp:2026-12-15

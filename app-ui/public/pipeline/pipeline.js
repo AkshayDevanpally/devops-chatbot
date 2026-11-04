@@ -5,9 +5,9 @@ const STAGES = [
   { id: "build", name: "Build", icon: "🏭", log: ["docker build --target runtime .", "Successfully built chat-api:3f2a9c1"] },
   { id: "test", name: "Test", icon: "🔍", log: ["pytest -q", "3 passed in 1.42s", "Quality gate: PASSED"] },
   { id: "scan", name: "Security scan", icon: "🩻", log: ["trivy image chat-api:3f2a9c1", "HIGH: 0  CRITICAL: 0"] },
-  { id: "sign", name: "Sign & box", icon: "🎁", log: ["syft -> sbom.spdx.json", "cosign sign ... OK", "pushed localhost:5000/chat-api:3f2a9c1"] },
+  { id: "sign", name: "Sign & box", icon: "🎁", log: ["trivy image --format spdx-json -> sbom/chat-api-3f2a9c1.spdx.json", "pushed localhost:5000/chat-api:3f2a9c1"] },
   { id: "dev", name: "Deploy dev", icon: "🧪", log: ["helm upgrade --install chatbot-dev --atomic", "rollout complete"] },
-  { id: "qa", name: "Deploy qa", icon: "✅", log: ["helm upgrade --install chatbot-qa --atomic", "k6: p95 820ms OK"] },
+  { id: "qa", name: "Deploy qa", icon: "✅", log: ["helm upgrade --install chatbot-qa --atomic", "make verify ENV=qa: passed 22, failed 0"] },
   { id: "prod", name: "Ship to prod", icon: "🚚", log: ["Approved by owner", "helm upgrade --install chatbot-prod --atomic", "live"] },
 ];
 

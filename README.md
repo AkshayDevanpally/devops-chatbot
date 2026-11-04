@@ -19,6 +19,8 @@ browser ─HTTPS─► Traefik ingress (k3s, cert from cert-manager) ──► u
 | `app-ui/` | Chat page, CI/CD factory page (demo), "Be a Dev" colour page, **Pulse** live dashboard, nginx image |
 | `compose.yaml` | Quick test with Docker before Kubernetes |
 | `monitoring/` | Prometheus config for the Compose test |
+| `Jenkinsfile` | CI/CD pipeline: checkout → build → test → scan → SBOM + push → dev → qa → approved prod |
+| `ci/jenkins/`, `k8s/ci/` | Jenkins controller image (plugins baked in) and its k3s manifests + deployer RBAC |
 | `k8s/tls/` | cert-manager namespace + policies, local CA, Traefik HTTP→HTTPS redirect |
 | `k8s/platform/` | Namespaces (PSA restricted), quotas, default-deny network policies, Ollama, Postgres, Prometheus |
 | `helm/chatbot/` | App chart + `values-dev/qa/prod.yaml` |
@@ -106,6 +108,46 @@ Checks: UI/API/model up · certificate issued by the local CA · HTTP redirects 
 data and rejects unknown ranges · privileged pod rejected by Pod Security Admission · a random pod can't
 reach Postgres, Ollama, Prometheus or the internet · no service-account token in the API pod.
 
+## Step 7 — CI/CD with Jenkins (Phase 4)
+
+```
+GitHub (private) ◄─poll every 2 min── Jenkins controller (k3s, namespace ci, https://jenkins.chatbot.local)
+                                            │ WebSocket over the HTTPS ingress
+                                            ▼
+                         host agent (systemd, user jenkins-agent) ── docker / trivy / helm
+                                            │ kubeconfig limited to chatbot-dev/qa/prod
+                                            ▼
+                               dev ──► qa ──► (approval) ──► prod
+```
+
+1. **Push the repo to GitHub** (private). Create an empty private repo on github.com, then:
+   ```bash
+   git remote add origin git@github.com:<you>/<repo>.git
+   git push -u origin master
+   ```
+2. **Start Jenkins**: `make jenkins` (reads the `origin` remote). It builds and scans the controller
+   image, generates the admin password and a deploy key into the cluster, and prints the public key.
+3. **Add the deploy key** on GitHub: repo → Settings → Deploy keys → Add, **read-only**.
+4. **Connect the build agent**: `make jenkins-agent` (sudo). Installs Java, creates the `jenkins-agent`
+   system user, a deploy-only kubeconfig, and a hardened systemd service.
+5. Open https://jenkins.chatbot.local (user `admin`, password from `make jenkins-password`).
+   Add `jenkins.chatbot.local` to the hosts file of the PC you open it from.
+
+Every push to `master` runs the pipeline within ~2 minutes: the same SHA-tagged image goes to dev and qa
+(each verified with `make verify`), then waits up to a day for someone to click **Ship it** for prod.
+The SBOM for each image is attached to the build.
+
+How it's kept safe:
+- **Controller** (k3s): PSA restricted, read-only root FS, no Kubernetes API token, 0 executors, default-deny
+  network (in: Traefik only; out: public SSH/HTTPS only), plugins baked into a scanned image, everything
+  configured as code (`k8s/ci/20-jenkins.yaml`); sign-up and anonymous access off.
+- **GitHub access**: read-only deploy key for this one repo; GitHub's SSH host key is pinned.
+- **Agent** (host): dedicated no-login user; systemd sandbox (read-only OS, no `/home`, no privilege gain).
+  It is in the `docker` group, which is root-equivalent on this host, so the job only builds this repo's
+  own `master` branch. Never point it at untrusted code or pull requests from forks.
+- **Deploys**: ServiceAccount `ci/jenkins-deployer` can only manage the chart's resources in the three app
+  namespaces (`k8s/ci/10-deployer-rbac.yaml`); prod also needs a human approval.
+
 ## Pulse — the live dashboard (`/pulse/`)
 
 Live view of the environment you're on, refreshed every 5 s (15 min / 1 h / 6 h ranges):
@@ -135,7 +177,7 @@ helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n
 ## Resource budget (16 GB / 4-core host)
 
 CPU is the tight resource here, not memory: the model generates on CPU, so Ollama may use 3 of the
-4 cores. Memory limits are sized so everything (plus Jenkins in Phase 4) fits with room to spare.
+4 cores. Memory limits are sized so everything, including Jenkins and its builds, fits.
 
 | Piece | Memory limit |
 |---|---|
@@ -144,9 +186,10 @@ CPU is the tight resource here, not memory: the model generates on CPU, so Ollam
 | Postgres (shared, `data`) | 768 MB (`shared_buffers=256MB`) |
 | Prometheus (shared, `monitoring`) | 384 MB |
 | cert-manager (3 pods) | 240 MB |
+| Jenkins controller (`ci`) | 1.5 GB (builds run on the host, outside these limits) |
 | prod (2–3 API + 2 UI) | 1.5 GB quota |
 | dev, qa | 768 MB quota each |
-| **Total** | **~11 GB**, leaving ~4 GB for Jenkins (Phase 4) and page cache |
+| **Total** | **~12.5 GB**, leaving ~2.5 GB for builds on the host and page cache |
 
 To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` in
 `helm/chatbot/values.yaml` (and `.env` for Compose), then `make platform` and redeploy each env. Expect slower replies on 4 cores (1.5b ≈ 3× slower than 0.5b).
@@ -166,5 +209,5 @@ To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` 
 
 - **Ollama version:** pinned to `ollama/ollama:0.30.10`. Check https://github.com/ollama/ollama/releases and bump it in `k8s/platform/30-ollama.yaml` and `.env`.
 - **TLS:** done in Phase 3.4 with a local CA. HSTS is 1 day (`tls.hstsSeconds`); raise it once certificates come from a public CA (e.g. Let's Encrypt in AWS).
-- **Pipeline page** runs a demo build; Phase 8 connects it to Jenkins. **Colour page** validates and rate-limits now; Phase 8 makes it trigger the `theme-deploy` job.
+- **Pipeline page** runs a demo build; its stations match the Jenkinsfile stages, and Phase 8 connects it to live Jenkins events. Image signing (cosign + an admission check) is a follow-up to the SBOM step. **Colour page** validates and rate-limits now; Phase 8 makes it trigger the `theme-deploy` job.
 - **Wake-on-LAN:** `/api/wake` is a stub locally; Phase 7 sends it to SQS for the Raspberry Pi relay.

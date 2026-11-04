@@ -1,4 +1,4 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca verify logs clean
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
@@ -30,6 +30,15 @@ tls:           ## cert-manager + local CA + HTTP->HTTPS redirect (Phase 3.4)
 
 trust-ca:      ## trust the local CA on this machine (sudo)
 	sudo ./scripts/08a-trust-ca.sh
+
+jenkins:       ## Jenkins controller in k3s (REPO_URL=git@github.com:<you>/<repo>.git) (Phase 4)
+	./scripts/09-jenkins.sh
+
+jenkins-agent: ## build agent on this host as a systemd service (sudo)
+	sudo ./scripts/09a-jenkins-agent.sh
+
+jenkins-password: ## print the Jenkins admin password
+	@kubectl -n ci get secret jenkins-secrets -o jsonpath='{.data.admin-password}' | base64 -d; echo
 
 build:         ## build, scan and push images tagged with the git SHA
 	./scripts/03-build-push.sh
