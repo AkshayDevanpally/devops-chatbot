@@ -13,7 +13,7 @@ model: qwen2.5:0.5b
 ollamaUrl: http://ollama.ai.svc.cluster.local:11434
 # Private Prometheus behind the Pulse page (k8s/platform/50-prometheus.yaml). "" disables Pulse data.
 prometheusUrl: http://prometheus.monitoring.svc.cluster.local:9090
-cookieSecure: false          # true once TLS is on (cert-manager, Phase 3.4)
+cookieSecure: true           # uid cookie only sent over HTTPS (needs tls.enabled)
 
 # Secret created by scripts/05-secrets.sh (later: External Secrets Operator).
 existingSecret: chat-api-secrets
@@ -40,3 +40,9 @@ pdb:
 
 ingress:
   className: traefik
+
+# HTTPS via cert-manager (scripts/08-tls.sh installs it and the local CA issuer).
+tls:
+  enabled: true
+  clusterIssuer: chatbot-local-ca
+  hstsSeconds: 86400           # 1 day: short while the CA is local; raise once certs are public

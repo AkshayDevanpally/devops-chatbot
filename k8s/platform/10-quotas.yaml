@@ -1,4 +1,8 @@
-# Sized for an 8 GB / 8-core host. Quotas define what "local hardware is full" means.
+# Sized for a 16 GB / 4-core host. Quotas define what "local hardware is full" means.
+# limits.cpu leaves room for one extra pod during a rolling update (maxSurge: 1):
+#   dev/qa: api 500m + ui 100m + surge 500m + 100m = 1.2 -> 1500m
+#   prod:   3 api x 1 + 2 ui x 100m (HPA at max) + surge 1 + 100m = 4.3 -> 5
+# CPU limits are ceilings, not reservations; scheduling uses requests.cpu.
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -8,7 +12,7 @@ spec:
   hard:
     requests.cpu: '1'
     requests.memory: 768Mi
-    limits.cpu: '3'
+    limits.cpu: '5'
     limits.memory: 1536Mi
     pods: '10'
 ---
@@ -21,7 +25,7 @@ spec:
   hard:
     requests.cpu: 500m
     requests.memory: 384Mi
-    limits.cpu: '1'
+    limits.cpu: 1500m
     limits.memory: 768Mi
     pods: '5'
 ---
@@ -34,7 +38,7 @@ spec:
   hard:
     requests.cpu: 500m
     requests.memory: 384Mi
-    limits.cpu: '1'
+    limits.cpu: 1500m
     limits.memory: 768Mi
     pods: '5'
 ---
@@ -46,9 +50,9 @@ metadata:
 spec:
   hard:
     requests.cpu: '1'
-    requests.memory: 1Gi
+    requests.memory: 1536Mi
     limits.cpu: '4'
-    limits.memory: 2560Mi
+    limits.memory: 4608Mi       # Ollama 4Gi + model-pull init container 512Mi
     pods: '2'
 ---
 apiVersion: v1
@@ -59,9 +63,9 @@ metadata:
 spec:
   hard:
     requests.cpu: 250m
-    requests.memory: 256Mi
+    requests.memory: 384Mi
     limits.cpu: '1'
-    limits.memory: 512Mi
+    limits.memory: 1Gi
     pods: '2'
 ---
 apiVersion: v1

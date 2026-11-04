@@ -1,0 +1,43 @@
+# Default-deny for cert-manager, then the minimum it needs.
+# With a local CA issuer there is no ACME, so cert-manager never needs the internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: cert-manager
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-and-apiserver
+  namespace: cert-manager
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    # Kubernetes API (service IP on 443, node IP on 6443). Same ranges as Prometheus uses.
+    - to:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+      ports: [{ port: 443 }, { port: 6443 }]
+---
+# The API server calls the webhook to validate cert-manager resources. It connects from the
+# node's network, so the source can't be narrowed to a pod; the port is.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: webhook-from-apiserver
+  namespace: cert-manager
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: webhook } }
+  policyTypes: [Ingress]
+  ingress:
+    - ports: [{ port: 10250 }]

@@ -3,8 +3,19 @@ kind: Ingress
 metadata:
   name: chatbot
   labels: {{- include "chatbot.labels" . | nindent 4 }}
+  {{- if .Values.tls.enabled }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.tls.clusterIssuer | quote }}
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.middlewares: {{ printf "%s-hsts@kubernetescrd" .Release.Namespace }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.host | quote }}]
+      secretName: chatbot-tls
+  {{- end }}
   rules:
     - host: {{ .Values.host | quote }}
       http:
@@ -15,3 +26,15 @@ spec:
           - path: /
             pathType: Prefix
             backend: { service: { name: ui, port: { name: http } } }
+{{- if .Values.tls.enabled }}
+---
+# Tells browsers to use HTTPS for this host from now on.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hsts
+  labels: {{- include "chatbot.labels" . | nindent 4 }}
+spec:
+  headers:
+    stsSeconds: {{ .Values.tls.hstsSeconds }}
+{{- end }}

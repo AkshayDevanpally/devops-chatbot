@@ -49,7 +49,8 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
-          args: ["-c", "shared_buffers=64MB", "-c", "max_connections=60", "-c", "password_encryption=scram-sha-256"]
+          args: ["-c", "shared_buffers=256MB", "-c", "effective_cache_size=512MB", "-c", "max_connections=60",
+                 "-c", "password_encryption=scram-sha-256"]
           envFrom: [{ secretRef: { name: postgres-secrets } }]
           env:
             - { name: POSTGRES_USER, value: postgres }
@@ -60,8 +61,8 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: { drop: [ALL] }
           resources:
-            requests: { cpu: 100m, memory: 128Mi }
-            limits: { cpu: "1", memory: 384Mi }
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 768Mi }
           readinessProbe:
             exec: { command: ["pg_isready", "-U", "postgres"] }
             periodSeconds: 5

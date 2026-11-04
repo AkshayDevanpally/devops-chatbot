@@ -1,0 +1,11 @@
+# cert-manager gets the same "restricted" Pod Security Standard as every other namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    chatbot.io/tier: shared
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

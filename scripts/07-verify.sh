@@ -5,31 +5,46 @@ set -uo pipefail
 ENV="${1:-dev}"; NS="chatbot-$ENV"
 case $ENV in prod) HOST=chatbot.local ;; *) HOST="$ENV.chatbot.local" ;; esac
 pass=0; fail=0
+# HTTPS against the local CA (make tls). --resolve so it works without /etc/hosts entries.
+CA="$(dirname "$0")/../certs/chatbot-local-ca.crt"
+URL="https://$HOST"
+curl() { command curl --cacert "$CA" --resolve "$HOST:443:127.0.0.1" --resolve "$HOST:80:127.0.0.1" "$@"; }
+[[ -s $CA ]] || { echo "missing $CA: run make tls first"; exit 1; }
 check() { if eval "$2" >/dev/null 2>&1; then echo "PASS  $1"; ((pass++)); else echo "FAIL  $1"; ((fail++)); fi; }
 blocked() { if eval "$2" >/dev/null 2>&1; then echo "FAIL  $1 (was allowed)"; ((fail++)); else echo "PASS  $1"; ((pass++)); fi; }
 
 echo "== functional ($HOST) =="
-check "UI serves the page"            "curl -sf http://$HOST/ | grep -q 'Qwen Chat'"
-check "API liveness"                  "curl -sf http://$HOST/api/healthz"
-check "API ready (db + model reachable)" "curl -sf http://$HOST/api/readyz"
-check "model is loaded"               "curl -sf http://$HOST/api/status | grep -q '\"ready\"'"
-blocked "metrics not exposed publicly"     "curl -sf http://$HOST/api/metrics"
-check "security headers on UI"        "curl -sI http://$HOST/ | grep -qi content-security-policy"
-check "bad theme colour rejected"     "test \$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{\"color\":\"<script>\"}' http://$HOST/api/theme) = 422"
-check "Pulse page served"             "curl -sf http://$HOST/pulse/ | grep -q '<title>Pulse'"
-check "Pulse has live Prometheus data" "curl -sf http://$HOST/api/pulse | grep -q '\"available\":true'"
-check "Pulse rejects unknown ranges"  "test \$(curl -s -o /dev/null -w '%{http_code}' 'http://$HOST/api/pulse?range=30d') = 422"
+check "UI serves the page"            "curl -sf $URL/ | grep -q 'Qwen Chat'"
+check "API liveness"                  "curl -sf $URL/api/healthz"
+check "API ready (db + model reachable)" "curl -sf $URL/api/readyz"
+check "model is loaded"               "curl -sf $URL/api/status | grep -q '\"ready\"'"
+blocked "metrics not exposed publicly"     "curl -sf $URL/api/metrics"
+check "security headers on UI"        "curl -sI $URL/ | grep -qi content-security-policy"
+check "bad theme colour rejected"     "test \$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{\"color\":\"<script>\"}' $URL/api/theme) = 422"
+check "Pulse page served"             "curl -sf $URL/pulse/ | grep -q '<title>Pulse'"
+check "Pulse has live Prometheus data" "curl -sf $URL/api/pulse | grep -q '\"available\":true'"
+check "Pulse rejects unknown ranges"  "test \$(curl -s -o /dev/null -w '%{http_code}' '$URL/api/pulse?range=30d') = 422"
+
+echo "== TLS =="
+check "certificate is Ready"          "kubectl -n $NS wait certificate/chatbot-tls --for=condition=Ready --timeout=5s"
+check "cert valid for $HOST, signed by local CA" "curl -sf -o /dev/null $URL/"
+check "plain HTTP redirects to HTTPS" "curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://$HOST/ | grep -Eq '^30[178] https://$HOST/'"
+check "HSTS header sent"              "curl -sI $URL/ | grep -qi strict-transport-security"
+check "identity cookie is Secure + HttpOnly" "curl -s -D - -o /dev/null $URL/api/history | grep -i '^set-cookie: uid=' | grep -i secure | grep -qi httponly"
+blocked "TLS 1.1 refused"             "command curl -s -o /dev/null --cacert $CA --resolve $HOST:443:127.0.0.1 --tlsv1.1 --tls-max 1.1 $URL/"
 
 echo "== Pod Security Admission =="
 blocked "privileged pod rejected in $NS" \
   "kubectl -n $NS run psa-test --image=busybox:1.36 --restart=Never --overrides='{\"spec\":{\"containers\":[{\"name\":\"t\",\"image\":\"busybox:1.36\",\"securityContext\":{\"privileged\":true}}]}}' --dry-run=server"
 
 echo "== NetworkPolicy =="
-SAFE='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"t","image":"busybox:1.36","command":["sh","-c","nc -z -w 3 $TARGET"],"env":[{"name":"TARGET","value":"__T__"}],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}},"resources":{"limits":{"cpu":"50m","memory":"32Mi"}}}]}}'
+# The probe waits 10 s first: k3s's policy engine (kube-router) applies egress rules a few seconds
+# after a pod starts, and connecting inside that window gives a false "allowed".
+SAFE='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"t","image":"busybox:1.36","command":["sh","-c","sleep 10; nc -z -w 3 $TARGET"],"env":[{"name":"TARGET","value":"__T__"}],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}},"resources":{"limits":{"cpu":"50m","memory":"32Mi"}}}]}}'
 nettest() { # $1=namespace $2="host port"
   kubectl -n "$1" delete pod nettest --ignore-not-found >/dev/null 2>&1
   kubectl -n "$1" run nettest --image=busybox:1.36 --restart=Never --overrides="${SAFE/__T__/$2}" >/dev/null 2>&1 || return 1
-  kubectl -n "$1" wait --for=jsonpath='{.status.phase}'=Succeeded pod/nettest --timeout=30s >/dev/null 2>&1; rc=$?
+  kubectl -n "$1" wait --for=jsonpath='{.status.phase}'=Succeeded pod/nettest --timeout=45s >/dev/null 2>&1; rc=$?
   kubectl -n "$1" delete pod nettest --ignore-not-found >/dev/null 2>&1; return $rc
 }
 blocked "random pod in $NS cannot reach Postgres"  "nettest $NS 'postgres.data.svc.cluster.local 5432'"

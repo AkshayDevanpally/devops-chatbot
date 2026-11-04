@@ -53,7 +53,7 @@ services:
     read_only: true
     tmpfs: ["/tmp"]
     networks: [backend, egress]     # egress only to download the model
-    mem_limit: 2g
+    mem_limit: 4g
 
   ollama-pull:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.30.10}

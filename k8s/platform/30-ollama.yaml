@@ -77,9 +77,11 @@ spec:
             - { name: OLLAMA_MAX_LOADED_MODELS, value: "1" }
           ports: [{ name: http, containerPort: 11434 }]
           securityContext: *sc
+          # 0.5b uses ~1 GB; 4 Gi leaves room for qwen2.5:1.5b or 3b (change MODEL only).
+          # CPU stays at 3 of the host's 4 cores: generation is CPU-bound.
           resources:
-            requests: { cpu: 500m, memory: 768Mi }
-            limits: { cpu: "3", memory: 2Gi }
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "3", memory: 4Gi }
           startupProbe:
             httpGet: { path: /, port: http }
             failureThreshold: 30

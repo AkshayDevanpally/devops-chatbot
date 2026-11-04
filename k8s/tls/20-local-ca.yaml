@@ -1,0 +1,39 @@
+# A private CA for *.chatbot.local. The CA key never leaves the cluster (secret in cert-manager,
+# encrypted at rest by k3s). Only the public certificate is exported, so devices can trust it.
+#
+# 1) a self-signed issuer, used only to create the CA
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+spec:
+  selfSigned: {}
+---
+# 2) the CA certificate (5 years)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: chatbot-local-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: QwenOps Local CA
+  subject:
+    organizations: [QwenOps]
+  secretName: chatbot-local-ca
+  duration: 43800h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never   # rotating the CA key would make every device re-trust it
+  issuerRef: { name: selfsigned-bootstrap, kind: ClusterIssuer, group: cert-manager.io }
+---
+# 3) the issuer the app Ingresses use
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: chatbot-local-ca
+spec:
+  ca:
+    secretName: chatbot-local-ca

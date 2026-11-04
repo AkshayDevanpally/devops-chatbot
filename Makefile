@@ -1,11 +1,11 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod verify logs clean
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca verify logs clean
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
 export KUBECONFIG ?= $(HOME)/.kube/config
 
 help:          ## list commands
-	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
 compose:       ## quick test with docker compose (http://localhost:8080)
 	docker compose up --build
@@ -24,6 +24,12 @@ registry:      ## start local registry on localhost:5000
 
 platform:      ## namespaces, policies, secrets, Ollama, Postgres
 	./scripts/04-platform.sh
+
+tls:           ## cert-manager + local CA + HTTP->HTTPS redirect (Phase 3.4)
+	./scripts/08-tls.sh
+
+trust-ca:      ## trust the local CA on this machine (sudo)
+	sudo ./scripts/08a-trust-ca.sh
 
 build:         ## build, scan and push images tagged with the git SHA
 	./scripts/03-build-push.sh

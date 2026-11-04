@@ -2,10 +2,10 @@
 
 A small Qwen chatbot (Ollama, `qwen2.5:0.5b`) with a FastAPI backend, a static UI, Postgres history
 (first 50 users, last 15 chats each), deployed to **k3s** in **dev / qa / prod** namespaces with
-security controls on by default. Sized for **8 GB RAM / 8 cores**.
+security controls on by default. Sized for **16 GB RAM / 4 cores**.
 
 ```
-browser ──► Traefik ingress (k3s) ──► ui (nginx)            namespace chatbot-<env>
+browser ─HTTPS─► Traefik ingress (k3s, cert from cert-manager) ──► ui (nginx)            namespace chatbot-<env>
                               └─/api─► chat-api (FastAPI) ──► ollama   (namespace ai)
                                                          ├──► postgres (namespace data, db per env)
                                                          └──► prometheus (namespace monitoring, Pulse page)
@@ -19,13 +19,14 @@ browser ──► Traefik ingress (k3s) ──► ui (nginx)            namespac
 | `app-ui/` | Chat page, CI/CD factory page (demo), "Be a Dev" colour page, **Pulse** live dashboard, nginx image |
 | `compose.yaml` | Quick test with Docker before Kubernetes |
 | `monitoring/` | Prometheus config for the Compose test |
+| `k8s/tls/` | cert-manager namespace + policies, local CA, Traefik HTTP→HTTPS redirect |
 | `k8s/platform/` | Namespaces (PSA restricted), quotas, default-deny network policies, Ollama, Postgres, Prometheus |
 | `helm/chatbot/` | App chart + `values-dev/qa/prod.yaml` |
 | `scripts/` | Numbered setup scripts, tests, verification |
 
 ## Prerequisites (on the Ubuntu Server machine)
 
-- Ubuntu Server 22.04/24.04, 8 GB RAM, ~20 GB free disk
+- Ubuntu Server 22.04 or newer, 16 GB RAM, 4 cores, ~20 GB free disk
 - Docker Engine: `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER` (log out/in)
 - `git`, `make`, `openssl`, `curl`
 - Optional but recommended: [Trivy](https://trivy.dev) and [hadolint](https://github.com/hadolint/hadolint) — the build script uses them if present
@@ -44,7 +45,7 @@ cp .env.example .env          # then replace both secrets:  openssl rand -hex 32
 make compose                  # first run downloads the model (~400 MB)
 ```
 Open http://localhost:8080. Stop with Ctrl+C, then `docker compose down` before Step 3
-(both use RAM; don't run them together on 8 GB).
+(both run their own Ollama and compete for the 4 CPU cores).
 
 ## Step 3 — Install k3s (once)
 
@@ -61,6 +62,24 @@ make platform     # also generates random secrets straight into the cluster (nev
 ```
 First run pulls the model into a volume; later restarts reuse it.
 
+## Step 4b — HTTPS (cert-manager + local CA)
+
+```bash
+make tls          # cert-manager, a private CA, HTTP→HTTPS redirect; writes certs/chatbot-local-ca.crt
+make trust-ca     # trust that CA on this machine (sudo)
+```
+The CA's private key stays in the cluster (encrypted at rest); only the public certificate is exported.
+Each environment's Ingress gets its own certificate from the CA when it's deployed (Step 5); cert-manager
+renews them automatically.
+
+Trust the CA on other devices (copy `certs/chatbot-local-ca.crt` over):
+- **Firefox:** Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import
+- **Chrome/Edge on Windows:** double-click the file → Install → Local Machine → "Trusted Root Certification Authorities"
+- **macOS:** open it in Keychain Access → System → set "Always Trust"
+- **Android/iOS:** install as a CA certificate in security settings
+
+Only import a CA you created yourself, and delete `certs/` if the machine is shared.
+
 ## Step 5 — Build and deploy
 
 ```bash
@@ -75,7 +94,7 @@ Add hostnames (on the server; from another PC use the server's LAN IP instead of
 ```bash
 echo "127.0.0.1 chatbot.local dev.chatbot.local qa.chatbot.local" | sudo tee -a /etc/hosts
 ```
-Open http://dev.chatbot.local, http://qa.chatbot.local, http://chatbot.local — each shows its
+Open https://dev.chatbot.local, https://qa.chatbot.local, https://chatbot.local — each shows its
 environment badge and its own theme colour.
 
 ## Step 6 — Verify it works *and* that the security controls block things
@@ -83,7 +102,7 @@ environment badge and its own theme colour.
 ```bash
 make verify ENV=dev
 ```
-Checks: UI/API/model up · metrics not public · CSP headers · bad colour rejected · Pulse page has live
+Checks: UI/API/model up · certificate issued by the local CA · HTTP redirects to HTTPS · HSTS · Secure cookie · TLS 1.1 refused · metrics not public · CSP headers · bad colour rejected · Pulse page has live
 data and rejects unknown ranges · privileged pod rejected by Pod Security Admission · a random pod can't
 reach Postgres, Ollama, Prometheus or the internet · no service-account token in the API pod.
 
@@ -113,33 +132,39 @@ kubectl -n chatbot-dev describe quota    # how full each environment is
 helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n chatbot-prod
 ```
 
-## Memory budget (8 GB host)
+## Resource budget (16 GB / 4-core host)
 
-| Piece | Limit |
+CPU is the tight resource here, not memory: the model generates on CPU, so Ollama may use 3 of the
+4 cores. Memory limits are sized so everything (plus Jenkins in Phase 4) fits with room to spare.
+
+| Piece | Memory limit |
 |---|---|
-| OS + k3s + Traefik + reserved | ~2.3 GB |
-| Ollama (shared, `ai`) | 2 GB |
-| Postgres (shared, `data`) | 384 MB |
+| OS + k3s + Traefik + reserved | ~2.5 GB |
+| Ollama (shared, `ai`) | 4 GB (0.5b uses ~1 GB; room for `qwen2.5:1.5b` or `3b`) |
+| Postgres (shared, `data`) | 768 MB (`shared_buffers=256MB`) |
 | Prometheus (shared, `monitoring`) | 384 MB |
+| cert-manager (3 pods) | 240 MB |
 | prod (2–3 API + 2 UI) | 1.5 GB quota |
 | dev, qa | 768 MB quota each |
+| **Total** | **~11 GB**, leaving ~4 GB for Jenkins (Phase 4) and page cache |
 
-If RAM is tight: `kubectl -n chatbot-qa scale deploy --all --replicas=0` when you're not testing qa.
-Jenkins (Phase 4) needs ~2 GB, so scale qa to 0 while building.
+To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` in
+`helm/chatbot/values.yaml` (and `.env` for Compose), then `make platform` and redeploy each env. Expect slower replies on 4 cores (1.5b ≈ 3× slower than 0.5b).
 
 ## Security controls included
 
 - **Images:** multi-stage, non-root (uid 10001 / 101), no shell tools added, OCI labels with Git SHA, `.dockerignore`, Trivy + hadolint in the build script. Pin digests with `./scripts/pin-digests.sh`.
 - **Pods:** PSA `restricted` on every namespace; `runAsNonRoot`, read-only root FS, all capabilities dropped, seccomp `RuntimeDefault`, no privilege escalation, no SA token.
-- **Network:** default-deny in/out per namespace; only Traefik → ui/api; only chat-api → Ollama/Postgres; Ollama may only reach public HTTPS (model download).
+- **Network:** default-deny in/out per namespace; only Traefik → ui/api; only chat-api → Ollama/Postgres; Ollama may only reach public HTTPS (model download). Known limit: k3s's built-in policy engine applies egress rules a few seconds after a pod starts, so a brand-new pod briefly has open egress (the verify probe waits 10 s for this; Cilium or Calico would close the gap).
 - **Resources:** requests/limits everywhere, ResourceQuota + LimitRange per namespace, PDB + HPA in prod.
 - **Data:** a separate Postgres database and login per environment; retention enforced by triggers.
 - **Secrets:** random, generated into the cluster, never in Git or on disk; k3s encrypts them at rest.
+- **TLS:** cert-manager with a private CA (ECDSA P-256), HTTP→HTTPS redirect, HSTS, `Secure` cookies; cert-manager runs in its own PSA-restricted, default-deny namespace with no internet access.
 - **App:** input validation, per-user/IP rate limits, signed HttpOnly cookies, CSP and other headers, metrics on a non-public port, JSON logs without message contents.
 
 ## Notes / next phases
 
 - **Ollama version:** pinned to `ollama/ollama:0.30.10`. Check https://github.com/ollama/ollama/releases and bump it in `k8s/platform/30-ollama.yaml` and `.env`.
-- **TLS:** HTTP locally for now. Phase 3.4 adds cert-manager; then set `cookieSecure: true`.
+- **TLS:** done in Phase 3.4 with a local CA. HSTS is 1 day (`tls.hstsSeconds`); raise it once certificates come from a public CA (e.g. Let's Encrypt in AWS).
 - **Pipeline page** runs a demo build; Phase 8 connects it to Jenkins. **Colour page** validates and rate-limits now; Phase 8 makes it trigger the `theme-deploy` job.
 - **Wake-on-LAN:** `/api/wake` is a stub locally; Phase 7 sends it to SQS for the Raspberry Pi relay.

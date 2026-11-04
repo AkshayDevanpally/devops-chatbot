@@ -1,0 +1,27 @@
+# Helm values for jetstack/cert-manager (version pinned in scripts/08-tls.sh).
+# Sized for the 8 GB host: ~200 MB of limits across the three pods.
+crds:
+  enabled: true
+  keep: true
+enableCertificateOwnerRef: true   # deleting a Certificate also deletes its secret
+prometheus:
+  enabled: false                  # not scraped; keeps the metrics port closed
+
+resources:
+  requests: { cpu: 10m, memory: 48Mi }
+  limits: { cpu: 200m, memory: 96Mi }
+
+webhook:
+  resources:
+    requests: { cpu: 10m, memory: 24Mi }
+    limits: { cpu: 100m, memory: 48Mi }
+
+cainjector:
+  resources:
+    requests: { cpu: 10m, memory: 48Mi }
+    limits: { cpu: 100m, memory: 96Mi }
+
+startupapicheck:
+  resources:
+    requests: { cpu: 10m, memory: 24Mi }
+    limits: { cpu: 100m, memory: 64Mi }

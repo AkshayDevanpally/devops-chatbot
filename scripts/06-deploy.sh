@@ -23,4 +23,4 @@ helm upgrade --install "chatbot-$ENV" helm/chatbot \
 
 kubectl -n "chatbot-$ENV" get pods -o wide
 HOST=$(helm get values "chatbot-$ENV" -n "chatbot-$ENV" --all -o json | python3 -c 'import json,sys;print(json.load(sys.stdin)["host"])')
-echo "Deployed $TAG to $ENV -> http://$HOST"
+echo "Deployed $TAG to $ENV -> https://$HOST"
