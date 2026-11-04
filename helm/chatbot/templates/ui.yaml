@@ -46,9 +46,15 @@ spec:
           ports: [{ name: http, containerPort: 8080 }]
           securityContext: {{- include "chatbot.containerSecurityContext" . | nindent 12 }}
           resources: {{- toYaml .Values.ui.resources | nindent 12 }}
+          # k3s's policy engine adds a new pod to the "Traefik may connect" rule a few seconds after
+          # it starts. Delay readiness so Traefik only routes to the pod once that rule exists, and
+          # pause before shutdown so Traefik stops routing to an old pod before it exits.
           readinessProbe:
             httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
             periodSeconds: 10
+          lifecycle:
+            preStop: { sleep: { seconds: 5 } }
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 20

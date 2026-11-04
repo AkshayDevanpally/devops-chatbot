@@ -1,7 +1,8 @@
 # Capacity & Error Journal pages — issues log
 
 Problems hit while adding the Capacity page (local hardware vs AWS) and the Error Journal page,
-on 4 November 2026. All found during testing on dev; none reached qa or prod.
+on 4 November 2026. Issues 1–8 were found while testing on dev. Issue 9 came from the first pipeline run
+that shipped the pages to prod, and led to a real fix for dropped requests during every deploy.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -9,10 +10,11 @@ on 4 November 2026. All found during testing on dev; none reached qa or prod.
 | 2 | Headless screenshots made working animations look broken | Testing | Explained |
 | 3 | Prod API pods always showed "High" | Frontend | Fixed |
 | 4 | Pinned chapter header was see-through on phones | Frontend | Fixed |
-| 5 | `make verify` failed "API liveness" right after a deploy | Deploy | Explained |
+| 5 | `make verify` failed "API liveness" right after a deploy | Deploy | Fixed (see Issue 9) |
 | 6 | New journal check failed: `grep -q` + `pipefail` | Testing | Fixed |
 | 7 | Journal statuses and emojis guessed wrong | Generator | Fixed |
 | 8 | hadolint flagged the named build context | Build | Fixed |
+| 9 | Build #4 "Ship to prod" failed: requests dropped during every rollout | Deploy | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -86,8 +88,8 @@ passed: 21   failed: 1
 **Cause:** the check ran seconds after the rollout, while the old chat-api pod was still shutting down. Three
 `/api/healthz` calls straight after returned 200, and a rerun passed 22/22.
 
-**Status:** explained, not changed. It could also hit the Jenkins deploy stages; if it recurs, give `make verify`
-a short retry on the liveness check.
+**Status:** first explained as a one-off. It recurred in build #4 (Issue 9), which showed the real cause and
+led to the fix.
 
 ### Issue 6 — New journal check failed: `grep -q` + `pipefail`
 
@@ -121,3 +123,41 @@ explicitly.
 cannot see, so it looks like an unknown stage.
 
 **Fix:** `# hadolint ignore=DL3022` on that one line, with a comment explaining why.
+
+### Issue 9 — Build #4 "Ship to prod" failed: requests dropped during every rollout
+
+**Symptom:** build #4 deployed to prod successfully (approved by admin), then `make verify` failed one check:
+
+```text
+[2026-11-04T08:42:40.952Z] Deployed 2c40759 to prod -> https://chatbot.local
+[2026-11-04T08:42:41.619Z] PASS  API ready (db + model reachable)
+[2026-11-04T08:42:44.926Z] FAIL  model is loaded
+[2026-11-04T08:45:52.058Z] passed: 23   failed: 1
+ERROR: script returned exit code 1
+Finished: FAILURE
+```
+
+A minute later `/api/status` answered `ready` on prod and dev. The failed check took ~3 s: a timed-out request.
+
+**Cause:** with Issue 5 ("API liveness", which never touches the model) the pattern was clear: requests through
+Traefik to a **brand-new pod** fail for a few seconds. Kubernetes routes to a pod as soon as it reports ready, but
+k3s's policy engine adds the new pod to the "Traefik may connect" rule a few seconds later. On the way out, Traefik
+keeps routing to old pods for a moment after they start shutting down. So every deploy dropped real user requests,
+not just test requests.
+
+**Measured on dev** (UI and API requested ~5×/s during a rollout):
+
+| Rollout | Requests | Failed |
+|---|---|---|
+| Before the fix | 580 | 5 (502 and timeouts) |
+| Deploying the fix (old pods still without the shutdown pause) | 708 | 4 |
+| Restart with the fix | 760 | 0 |
+| Restart with the fix, again | 760 | 0 |
+
+**Fix:**
+- chat-api and ui: `readinessProbe.initialDelaySeconds: 10`, so traffic only arrives once the network rule exists;
+  `lifecycle.preStop.sleep: 5s`, so Traefik stops routing to an old pod before it exits.
+- `make verify` first waits (up to 60 s) for five good answers in a row, so it tests the app, not the rollout.
+
+**Lesson:** a flaky check right after a deploy is often a real, user-facing gap. Measure it under load before
+calling it a fluke.

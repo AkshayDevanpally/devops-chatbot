@@ -14,6 +14,20 @@ curl() { command curl --cacert "$CA" --resolve "$HOST:443:127.0.0.1" --resolve "
 check() { if eval "$2" >/dev/null 2>&1; then echo "PASS  $1"; ((pass++)); else echo "FAIL  $1"; ((fail++)); fi; }
 blocked() { if eval "$2" >/dev/null 2>&1; then echo "FAIL  $1 (was allowed)"; ((fail++)); else echo "PASS  $1"; ((pass++)); fi; }
 
+echo "== waiting for $HOST to answer steadily (up to 60 s) =="
+# Right after a rollout, the newest pods may not be reachable yet (policy-engine delay). Wait for
+# five good answers in a row before testing, so checks measure the app and not the rollout.
+ok=0
+for _ in $(seq 1 30); do
+  if curl -sf "$URL/api/status" 2>/dev/null | grep '"ready"' >/dev/null && curl -sf "$URL/" >/dev/null 2>&1; then
+    ok=$((ok + 1)); [[ $ok -ge 5 ]] && break
+  else
+    ok=0
+  fi
+  sleep 2
+done
+echo "steady after $ok good answers in a row"
+
 echo "== functional ($HOST) =="
 check "UI serves the page"            "curl -sf $URL/ | grep -q 'Qwen Chat'"
 check "API liveness"                  "curl -sf $URL/api/healthz"
