@@ -101,7 +101,7 @@ services:
 
   ui:
     <<: *hardened
-    build: { context: ./app-ui, args: { GIT_SHA: "${GIT_SHA:-dev}" } }
+    build: { context: ./app-ui, additional_contexts: { docs: ./docs }, args: { GIT_SHA: "${GIT_SHA:-dev}" } }
     image: localhost:5000/ui:${GIT_SHA:-dev}
     ports: ["127.0.0.1:8080:8080"]          # only reachable from this machine
     volumes: ["./app-ui/nginx/compose-api-proxy.conf:/etc/nginx/extra/api.conf:ro"]

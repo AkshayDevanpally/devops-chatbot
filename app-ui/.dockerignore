@@ -1,4 +1,6 @@
 *.md
+journal/*
+!journal/build_journal.py
 Dockerfile
 .dockerignore
 nginx/compose-api-proxy.conf

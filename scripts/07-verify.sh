@@ -24,6 +24,9 @@ check "security headers on UI"        "curl -sI $URL/ | grep -qi content-securit
 check "bad theme colour rejected"     "test \$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{\"color\":\"<script>\"}' $URL/api/theme) = 422"
 check "Pulse page served"             "curl -sf $URL/pulse/ | grep -q '<title>Pulse'"
 check "Pulse has live Prometheus data" "curl -sf $URL/api/pulse | grep -q '\"available\":true'"
+check "Capacity page has live data"   "curl -sf $URL/api/capacity | grep -q '\"available\":true'"
+# grep without -q reads the whole body: with pipefail, -q quitting early would make curl fail (SIGPIPE)
+check "Journal built from docs/"       "curl -sf $URL/journal/journal.json | grep '\"entries\"' >/dev/null"
 check "Pulse rejects unknown ranges"  "test \$(curl -s -o /dev/null -w '%{http_code}' '$URL/api/pulse?range=30d') = 422"
 
 echo "== TLS =="

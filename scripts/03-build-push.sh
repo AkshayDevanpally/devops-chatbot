@@ -18,7 +18,10 @@ declare -A CONTEXT=([chat-api]=app-chat [ui]=app-ui)
 
 build() {
   echo "==> build $1:$TAG"
-  DOCKER_BUILDKIT=1 docker build --pull --build-arg GIT_SHA="$TAG" -t "$REGISTRY/$1:$TAG" "${CONTEXT[$1]}"
+  local extra=()
+  # The UI image also reads docs/ (Journal page), as a second, named build context.
+  [[ $1 == ui ]] && extra=(--build-context docs=docs)
+  DOCKER_BUILDKIT=1 docker build --pull "${extra[@]}" --build-arg GIT_SHA="$TAG" -t "$REGISTRY/$1:$TAG" "${CONTEXT[$1]}"
   if command -v hadolint >/dev/null; then hadolint "${CONTEXT[$1]}/Dockerfile"; fi
 }
 scan() {

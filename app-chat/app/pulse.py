@@ -12,7 +12,7 @@ import httpx
 RANGES = {"15m": (900, 15), "1h": (3600, 30), "6h": (21600, 120)}  # span seconds, step seconds
 CACHE_SECONDS = 4.0
 # Health probes and this page's own refreshes would drown out real traffic on a small app.
-_REAL_TRAFFIC = 'route!~"/api/(healthz|readyz|pulse)"'
+_REAL_TRAFFIC = 'route!~"/api/(healthz|readyz|pulse|capacity)"'
 
 
 def workloads(env: str) -> list[tuple[str, str]]:

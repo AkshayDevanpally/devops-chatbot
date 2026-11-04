@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Capacity</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand">Qwen<span>Ops</span></div>
+    <nav><a href="/">Chat</a><a href="/pipeline/">Pipeline</a><a href="/dev/">Be a Dev</a><a href="/pulse/">Pulse</a><a href="/capacity/">Capacity</a><a href="/journal/">Journal</a></nav>
+    <div class="env">local</div>
+  </header>
+  <main class="wide">
+    <div class="pulse-head">
+      <div>
+        <h2>Capacity</h2>
+        <p class="note">Where QwenOps runs right now: the home server, plus AWS only when it needs more room. Refreshed every 10 seconds.</p>
+      </div>
+      <div class="live" id="live" aria-live="polite"><i></i><span id="live-text">Connecting…</span></div>
+    </div>
+
+    <div class="banner" id="no-prom">
+      Prometheus isn't reachable, so these numbers are missing. In Kubernetes run <b>make platform</b>.
+    </div>
+
+    <div class="split">
+      <!-- left: the home server -->
+      <section class="half" aria-labelledby="local-title">
+        <div class="half-head">
+          <span class="half-icon" aria-hidden="true">🏠</span>
+          <div>
+            <h3 id="local-title">Local hardware</h3>
+            <p class="note small" id="local-sub">Home server running k3s</p>
+          </div>
+          <span class="chip on" id="local-state">● Running</span>
+        </div>
+
+        <div class="tiles tiles-4" id="local-tiles"></div>
+
+        <article class="card" id="local-chart">
+          <div class="card-head"><h3>CPU and memory, last hour</h3></div>
+          <p class="note small">Share of the whole server.</p>
+          <div class="legend"></div>
+          <div class="plot"><div class="tip" role="tooltip" hidden></div></div>
+          <details class="data"><summary>View as table</summary><div class="scroll-x"><table class="dt"></table></div></details>
+        </article>
+
+        <article class="card">
+          <div class="card-head"><h3>Memory by namespace</h3><span class="note small" id="ns-total"></span></div>
+          <p class="note small">Every namespace on the server, largest first. CPU in cores.</p>
+          <ol class="bars" id="ns-bars"><li class="muted">Waiting for data…</li></ol>
+        </article>
+      </section>
+
+      <!-- right: AWS (burst-only; everything but the database is destroyed when idle) -->
+      <section class="half" aria-labelledby="aws-title">
+        <div class="half-head">
+          <span class="half-icon" aria-hidden="true">☁️</span>
+          <div>
+            <h3 id="aws-title">AWS</h3>
+            <p class="note small">Extra capacity on demand, plus the database</p>
+          </div>
+          <span class="chip" id="aws-state">○ Checking…</span>
+        </div>
+
+        <article class="card aws-card" id="aws-burst">
+          <div class="card-head"><h3>Burst compute</h3><span class="chip small" data-state></span></div>
+          <div class="aws-body"></div>
+        </article>
+
+        <article class="card aws-card" id="aws-rds">
+          <div class="card-head"><h3>Database (RDS Postgres)</h3><span class="chip small" data-state></span></div>
+          <div class="aws-body"></div>
+        </article>
+
+        <p class="note small cost-rule">
+          💸 Cost rule: AWS resources are created with Terraform only when the home server is full, and destroyed
+          as soon as they're not needed. The database is the one thing that stays, so the data is never lost.
+        </p>
+      </section>
+    </div>
+  </main>
+  <script src="/config.js"></script>
+  <script src="/common.js"></script>
+  <script src="/capacity/capacity.js"></script>
+</body>
+</html>

@@ -18,6 +18,9 @@ MODEL = os.getenv("MODEL", "qwen2.5:0.5b")
 APP_ENV = os.getenv("APP_ENV", "local")
 # Private Prometheus for the Pulse page. Empty = Pulse shows "not connected".
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "")
+# Prod's local ceiling of API pods (helm values-prod: api.hpa.maxReplicas). At this many,
+# extra load is meant to burst to AWS; the Capacity page shows how close prod is.
+PROD_BURST_AT = int(os.getenv("PROD_BURST_AT", "3"))
 
 MAX_USERS = 50            # enforced in the database too
 MAX_CHATS_PER_USER = 15   # enforced in the database too

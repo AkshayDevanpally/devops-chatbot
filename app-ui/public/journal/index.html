@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Error Journal</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand">Qwen<span>Ops</span></div>
+    <nav><a href="/">Chat</a><a href="/pipeline/">Pipeline</a><a href="/dev/">Be a Dev</a><a href="/pulse/">Pulse</a><a href="/capacity/">Capacity</a><a href="/journal/">Journal</a></nav>
+    <div class="env">local</div>
+  </header>
+  <main class="wide">
+    <section class="j-hero">
+      <div class="j-sparks" aria-hidden="true">
+        <span>💥</span><span>🐛</span><span>⚠️</span><span>🔥</span><span>🧯</span><span>🛠️</span><span>💥</span><span>🐞</span>
+      </div>
+      <h2>📓 Error Journal</h2>
+      <p class="note">Every error, mistake and false alarm hit while building QwenOps, read straight from the project's
+        <code>docs/</code> folder, so new write-ups appear here after the next deploy.</p>
+      <div class="j-stats" id="stats" aria-live="polite"></div>
+    </section>
+
+    <div class="j-controls">
+      <div class="seg" role="group" aria-label="Show">
+        <button type="button" data-filter="all" class="on">All</button>
+        <button type="button" data-filter="open">🔓 Open</button>
+        <button type="button" data-filter="fixed">✅ Fixed</button>
+        <button type="button" data-filter="false-alarm">🕵️ False alarms</button>
+      </div>
+      <div class="seg" role="group" aria-label="Scroll speed">
+        <button type="button" data-speed="18">🐢 Slow</button>
+        <button type="button" data-speed="36" class="on">Normal</button>
+        <button type="button" data-speed="80">🐇 Fast</button>
+      </div>
+      <button type="button" class="j-play" id="play" aria-pressed="false">⏸ Pause</button>
+    </div>
+
+    <div class="j-frame">
+      <div class="j-progress" aria-hidden="true"><i id="progress"></i></div>
+      <div class="j-pill" id="pill" aria-live="polite">▶ Auto-scrolling</div>
+      <section class="journal" id="viewer" tabindex="0"
+               aria-label="Error journal. Scrolls by itself; hover or focus to pause, then scroll freely.">
+        <div id="entries"><p class="muted j-loading">Opening the journal…</p></div>
+      </section>
+    </div>
+    <div class="j-toast" id="toast" role="status" hidden></div>
+  </main>
+  <script src="/config.js"></script>
+  <script src="/common.js"></script>
+  <script src="/journal/journal.js"></script>
+</body>
+</html>

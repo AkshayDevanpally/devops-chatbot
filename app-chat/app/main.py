@@ -16,7 +16,7 @@ from prometheus_client import Counter, Gauge, Histogram, start_http_server
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field, field_validator
 
-from app import config, pulse
+from app import capacity, config, pulse
 
 # ---------- logging (JSON to stdout, never message bodies) ----------
 logging.basicConfig(level=logging.INFO, format='{"ts":"%(asctime)s","level":"%(levelname)s","msg":%(message)s}')
@@ -42,12 +42,13 @@ HTTP_LATENCY = Histogram("http_request_seconds", "Time until response headers", 
 pool: AsyncConnectionPool | None = None
 http: httpx.AsyncClient | None = None
 pulse_source: pulse.Pulse | None = None
+capacity_source: capacity.Capacity | None = None
 signer = URLSafeSerializer(config.SESSION_SECRET, salt="uid")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global pool, http, pulse_source
+    global pool, http, pulse_source, capacity_source
     pool = AsyncConnectionPool(config.DATABASE_URL, min_size=1, max_size=5, open=False)
     await pool.open(wait=False)
     # Metrics on a separate port that is NOT behind the ingress, so they're never public.
@@ -55,10 +56,12 @@ async def lifespan(_: FastAPI):
     http = httpx.AsyncClient(base_url=config.OLLAMA_URL, timeout=httpx.Timeout(120, connect=5))
     if config.PROMETHEUS_URL:
         pulse_source = pulse.Pulse(config.PROMETHEUS_URL, config.APP_ENV)
+        capacity_source = capacity.Capacity(config.PROMETHEUS_URL, config.APP_ENV, config.PROD_BURST_AT)
     jlog("startup", model=config.MODEL, pulse=bool(pulse_source))
     yield
-    if pulse_source:
-        await pulse_source.aclose()
+    for source in (pulse_source, capacity_source):
+        if source:
+            await source.aclose()
     await http.aclose()
     await pool.close()
 
@@ -353,6 +356,16 @@ async def pulse_view(request: Request, response: Response, range_: str = Query("
         data = pulse.unavailable(config.APP_ENV, range_)
     data["model"] = (await status())["state"]
     data["storage"] = await storage_counts()
+    response.headers["Cache-Control"] = "no-store"
+    return data
+
+
+# ---------- Capacity: local hardware vs AWS ----------
+@app.get("/api/capacity")
+async def capacity_view(request: Request, response: Response):
+    if rate_limited(f"capacity:{request.client.host}", 30):
+        raise HTTPException(429, "too many refreshes")
+    data = await capacity_source.snapshot("capacity") if capacity_source else capacity.unavailable()
     response.headers["Cache-Control"] = "no-store"
     return data
 

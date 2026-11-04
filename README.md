@@ -164,6 +164,28 @@ How it's wired, and why it's safe to show publicly:
   No PromQL ever comes from the browser, and Prometheus is not on the ingress.
 - In Docker Compose, Pulse shows traffic and chat numbers; CPU/memory need Kubernetes (the kubelet).
 
+## Capacity (`/capacity/`) and Error Journal (`/journal/`)
+
+**Capacity** splits the screen in two, refreshed every 10 s:
+- 🏠 **Local hardware**: host CPU and memory (with OK / High / Critical), pods, prod API pods against the
+  local ceiling where AWS burst starts, a one-hour CPU/memory chart, and memory per namespace.
+- ☁️ **AWS**: burst compute (Phase 6) and the RDS database (Phase 5). With nothing running it says
+  *Nothing running · $0/h*, which is the normal state under the AWS cost rule.
+
+It uses the same safety model as Pulse: the browser calls `/api/capacity` (no parameters); chat-api runs fixed
+Prometheus queries. Local and AWS numbers are kept apart by one label: **anything scraped from AWS must carry
+`cloud="aws"`** (add it in the scrape config when Phases 5–6 bring AWS metrics in). Local queries exclude it.
+
+**Error Journal** shows every incident written up in `docs/` as a self-scrolling journal: hover (or focus)
+to pause and scroll by hand, move away to resume; speed and status filters; reduced-motion users get no animation.
+- Built at image build time by `app-ui/journal/build_journal.py` (standard library only), which reads
+  `.docx`, `.md` and `.txt`. Each file is a chapter; each section at its most common heading level is an entry,
+  tagged with an emoji and a status (taken from the doc's own summary table when it has a `#` / `Status` table).
+- **New or edited docs appear after the next pipeline run**: push to `master` → Jenkins builds the UI image
+  (which runs the generator) → deploy. The open page also re-checks every 5 minutes.
+- The site may be public, so the generator **redacts** private IPs, SSH keys, long hex strings, password
+  assignments and emails. Still, never put secrets in `docs/`.
+
 ## Useful commands
 
 ```bash
@@ -206,6 +228,14 @@ To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` 
 - **App:** input validation, per-user/IP rate limits, signed HttpOnly cookies, CSP and other headers, metrics on a non-public port, JSON logs without message contents.
 
 ## Notes / next phases
+
+- **AWS cost rule (applies to Phases 5–9):** AWS is used only when the home server needs extra capacity,
+  and is provisioned with Terraform. When that capacity is no longer needed, **every AWS resource is destroyed
+  except the Postgres RDS database**, which stays to keep the data. Terraform is therefore split into two stacks:
+  - **persistent**: RDS plus the minimum it needs (VPC/subnets, DB subnet group, security group). Protected with
+    `deletion_protection`, `prevent_destroy`, automated backups and a final snapshot. No always-on extras
+    (no NAT gateway, load balancer or idle EC2).
+  - **burst**: everything else (compute, load balancers, networking for it). Safe to `terraform destroy` at any time.
 
 - **Ollama version:** pinned to `ollama/ollama:0.30.10`. Check https://github.com/ollama/ollama/releases and bump it in `k8s/platform/30-ollama.yaml` and `.env`.
 - **TLS:** done in Phase 3.4 with a local CA. HSTS is 1 day (`tls.hstsSeconds`); raise it once certificates come from a public CA (e.g. Let's Encrypt in AWS).
