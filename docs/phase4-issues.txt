@@ -1,0 +1,193 @@
+QWENOPS - PHASE 4 (JENKINS CI/CD): ISSUES AND MISTAKES
+=======================================================
+
+Date:        4 November 2026
+Environment: Ubuntu 26.10, k3s v1.36.5, 16 GB RAM / 4 cores, Jenkins 2.580.2 LTS (JDK 21)
+Outcome:     Pipeline working end to end. Build #2 passed all 8 stages, including the approved
+             deploy to prod (about 18 minutes). Commit d1cdac0.
+Detailed error output for each stage: docs/phase4-error-log.md
+
+
+SUMMARY
+-------
+
+ #   Issue                                              Type       Status
+ --  -------------------------------------------------  ---------  ---------------------------
+ 1   Building images inside k3s is blocked by policy    Design     Solved: host build agent
+ 2   .last-tag tracked in Git (builds look "dirty")     Mistake    Fixed
+ 3   Trivy timed out scanning the Jenkins image         Issue      Fixed (20-minute limit)
+ 4   Jenkins image failed the scan: 12 HIGH CVEs        Issue      Fixed (11) / accepted (1)
+ 5   Trivy silently skips Jenkins plugins (.jpi)        Issue      Fixed (advisory check)
+ 6   Wrong path when removing jenkins-plugin-cli        Mistake    Fixed
+ 7   Jenkins crash-looped: invalid JCasC settings       Mistake    Fixed
+ 8   Empty API results ("no jobs, no nodes")            Mistake    False alarm (curl globbing)
+ 9   Deploy account "can exec into pods"                Mistake    False alarm (wrong check)
+ 10  Build #1 failed: Permission denied (publickey)     Issue      Fixed (deploy key added)
+ 11  Personal SSH key confused with the deploy key      Confusion  Clarified
+ 12  Port forward showed "404 page not found"           Usage      Fixed (use the hostname)
+ 13  Build watcher never reported anything              Mistake    Found while writing this
+ 14  Extra "main" branch on GitHub                      Note       Fixed (deleted)
+ 15  make verify takes about 3 minutes per environment  Note       Open (improvement)
+
+
+DETAILS
+-------
+
+1. Building images inside k3s is blocked by policy (design decision)
+   Problem:  Every namespace runs Pod Security "restricted". All in-cluster image builders
+             (Docker-in-Docker, Kaniko, BuildKit) need root, privileged mode or unconfined
+             seccomp/AppArmor, which "restricted" correctly forbids. The tests (scripts/test.sh)
+             and the registry (127.0.0.1:5000) also depend on the host's Docker.
+   Decision: Jenkins controller in k3s (restricted, no executors); builds on a dedicated
+             "jenkins-agent" user on the host, as a hardened systemd service.
+   Trade-off: The agent is in the docker group, which is root-equivalent on the host. Mitigated:
+             the job builds only this repo's own master branch, no pull requests from forks.
+   Lesson:   Decide where builds run before writing the pipeline. It drives everything else.
+
+2. Mistake: .last-tag tracked in Git
+   Problem:  .last-tag (written by every build) had been committed. After any build the working
+             tree is "dirty", so the next build would be tagged <sha>-dirty.
+   Fix:      git rm --cached .last-tag, and added .last-tag and sbom/ to .gitignore.
+   Lesson:   Build outputs never belong in Git. Check `git ls-files` for generated files.
+
+3. Trivy timed out scanning the Jenkins image
+   Error:    "analyze error ... walk error: context deadline exceeded"
+   Cause:    Trivy's default limit is 5 minutes. The first scan of a Java image also downloads the
+             Java vulnerability database, and the image has hundreds of jar files.
+   Mistake:  The scan command was piped into `tail`, so the shell printed exit=0 and the failure
+             was easy to miss.
+   Fix:      scripts/09-jenkins.sh runs Trivy with --timeout 20m for the Jenkins image.
+   Lesson:   Never judge success from the exit code of a pipeline that ends in tail/grep.
+
+4. Jenkins image failed the vulnerability scan (12 HIGH)
+   Found:    jackson-core / jackson-databind (8 CVEs) in /opt/jenkins-plugin-manager.jar
+             golang.org/x/crypto, x/net, x/text (3 CVEs) in /usr/local/bin/git-lfs
+             guava 33.7.1 (1 CVE, denial of service) inside jenkins.war (Jenkins core)
+   Fix:      Removed jenkins-plugin-manager.jar (only needed while building the image) and
+             git-lfs (this repo uses no LFS). The plugins themselves were clean.
+   Accepted: guava CVE-2026-102554. Not fixed in any Jenkins LTS yet (2.580.2 is the newest).
+             Recorded in ci/jenkins/.trivyignore with a reason and an expiry: 2026-12-15.
+             After that date the scan fails again until the FROM line is bumped.
+   Lesson:   Remove what the runtime does not need before reaching for an ignore. Every accepted
+             finding needs a written reason and an expiry date.
+
+5. Trivy silently skips Jenkins plugins
+   Problem:  The image scan passed, but its summary listed no plugin files. Trivy only reads
+             .jar/.war/.ear files, not .jpi, so none of the 67 plugins had been checked.
+   Fix:      The image build now runs `jenkins-plugin-cli --view-security-warnings` and fails if
+             any plugin has a Jenkins security advisory ("<plugin> - <issue>" lines).
+   Lesson:   A passing scan only covers what the scanner can read. Check what it scanned
+             (--list-all-pkgs), not just the result.
+
+6. Mistake: wrong path when removing jenkins-plugin-cli
+   Problem:  The Dockerfile removed /bin/jenkins-plugin-cli; the wrapper is at
+             /usr/bin/jenkins-plugin-cli (rm -f hid the mistake).
+   Fix:      Corrected the path after checking it inside the image (`command -v`).
+   Lesson:   Look up paths in the actual image before deleting them; rm -f never complains.
+
+7. Mistake: Jenkins crash-looped on first deploy (invalid JCasC settings)
+   Error:    "UnknownAttributesException: standard: Invalid configuration elements for type:
+             class hudson.security.csrf.DefaultCrumbIssuer : excludeClientIPFromCrumb"
+   Effect:   CrashLoopBackOff; `make jenkins` timed out after 10 minutes waiting for the rollout.
+   Cause:    The config used settings removed from current Jenkins: crumbIssuer.excludeClientIPFromCrumb
+             and remotingSecurity (agent-to-controller security is now always on).
+   Fix:      Removed both. Then tested the JCasC file against the same image locally in Docker
+             (dummy secrets) until "Jenkins is fully up and running", before redeploying.
+   Lesson:   Test configuration-as-code locally against the exact image first. A Docker run
+             takes 30 seconds; a crash-looping pod costs 10 minutes per attempt.
+
+8. Mistake: API showed "no jobs and no nodes" (false alarm)
+   Problem:  curl "http://.../api/json?tree=jobs[name]" printed nothing.
+   Cause:    curl treats [ ] as a URL pattern (globbing) and gave up without a request.
+   Fix:      Use curl -g. The job "chatbot" and node "host-agent" were there all along.
+   Lesson:   Empty output is not a result. Confirm the request was actually sent.
+
+9. Mistake: deploy account appeared able to exec into pods (false alarm)
+   Problem:  `kubectl auth can-i create pods/exec --as=...jenkins-deployer` answered "yes".
+   Cause:    In that syntax "pods/exec" means a pod NAMED "exec", not the exec subresource.
+             The account may create pods, so the answer was yes.
+   Fix:      Correct check: `kubectl auth can-i create pods --subresource=exec ...` -> no.
+             Exec, attach and port-forward are all denied, as designed.
+   Lesson:   Before reporting a security finding, confirm the test asks the question you mean.
+             `--list` was the clue: exec was not in the account's permissions.
+
+10. Build #1 failed: Permission denied (publickey)
+    Error:   git@github.com: Permission denied (publickey).
+    Cause:   The pipeline ran as soon as master was pushed, before Jenkins' deploy key was added.
+    Fix:     Added the read-only deploy key to the repo. Build #2 checked out fine.
+    Lesson:  Add the deploy key before the first push, or expect the first build to fail.
+
+11. Personal SSH key confused with the deploy key
+    Problem: A new key (Ubuntu-DevOps-Server) was created on the server and shared as the key to
+             use. It is the server's personal key: GitHub logs it in as AkshayDevanpally.
+    Clarified: Two different keys with two jobs:
+             - personal key (~/.ssh/id_ed25519): you push code; account-wide access
+             - Jenkins deploy key (in the cluster secret ci/jenkins-secrets): read-only, this repo only
+    Lesson:  Use a deploy key for machines. If the cluster were compromised, only one repo can be read.
+
+12. Port forward showed "404 page not found"
+    Problem: Forwarding port 443 in VS Code and opening it gave Traefik's 404 page.
+    Cause:   VS Code's "Open in Browser" opens https://localhost. Traefik chooses the site by
+             hostname and has no site named localhost (curl tests: localhost 404, name 200).
+    Fix:     Hosts file on the laptop: 127.0.0.1 jenkins.chatbot.local (and the app hostnames),
+             then type https://jenkins.chatbot.local in the address bar.
+    Also:    The laptop must trust the local CA first: with HSTS, browsers refuse to click past
+             a certificate warning.
+
+13. Mistake: build watcher never reported anything
+    Problem: The background watcher for build #2 printed no events although all stages finished.
+    Cause:   The status script nested escaped quotes inside a single-quoted Python snippet. The
+             Python failed with a syntax error, its stderr went to /dev/null, so the watcher
+             stayed silent instead of failing.
+    Lesson:  Silence is not success. Test a watcher's script once by hand, and never send the
+             error output of its core step to /dev/null.
+
+14. Extra "main" branch on GitHub (open, cosmetic)
+    The repo was created with a README, so GitHub made a "main" branch ("Initial commit").
+    Jenkins builds master, so nothing broke. Fixed: master made the default branch and main
+    deleted (it held only GitHub's two-line starter README).
+
+15. make verify takes about 3 minutes per environment (open, improvement)
+    Deploy dev 223 s, Deploy qa 203 s, Ship to prod 253 s; most of that is make verify. Each of
+    the four network probes waits 10 s (k3s policy-engine delay, see the Phase 3.4 log) plus pod
+    start-up. Possible fix: run the four probes from one pod, in parallel.
+
+
+KEY TAKEAWAYS
+-------------
+- Check that a test asks the right question before acting on its answer (issues 8, 9, 13).
+- A passing scan only covers what the scanner can read (issue 5).
+- Shrink the image before accepting findings; every exception needs a reason and an expiry (4).
+- Test configuration-as-code locally against the real image first (7).
+- Machines get read-only deploy keys, not personal keys (10, 11).
+- Never trust an exit code from a pipeline that ends in tail or grep (3).
+
+
+FILES CHANGED IN PHASE 4
+------------------------
+Jenkinsfile                       New: 8-stage pipeline matching the Pipeline page
+ci/jenkins/Dockerfile             New: controller image, plugin advisory check, unused tools removed
+ci/jenkins/plugins.txt            New: 7 plugins
+ci/jenkins/.trivyignore           New: one accepted CVE with reason and expiry
+k8s/ci/00-namespace.yaml          New: ci namespace, quota, default-deny, DNS
+k8s/ci/10-deployer-rbac.yaml      New: deploy-only ServiceAccount for the three app namespaces
+k8s/ci/20-jenkins.yaml            New: controller, JCasC, ingress, HSTS, network policy
+scripts/09-jenkins.sh             New: build/scan/push image, secrets, deploy controller
+scripts/09a-jenkins-agent.sh      New: host agent (Java, user, kubeconfig, systemd) (sudo)
+scripts/03-build-push.sh          Split into steps: build / scan / sbom / push / all
+scripts/06-deploy.sh              Prod accepts PROD_APPROVED=yes after Jenkins approval
+scripts/07-verify.sh              CA_FILE override for clean checkouts
+Makefile                          jenkins, jenkins-agent, jenkins-password targets
+README.md                         Step 7 (CI/CD with Jenkins), resource budget
+.gitignore                        sbom/, .last-tag
+app-ui/public/pipeline/pipeline.js  Demo log text matches the real stages
+
+
+OPEN ITEMS
+----------
+- Before 2026-12-15: bump Jenkins to the next LTS and delete the guava entry in ci/jenkins/.trivyignore.
+- Optional: speed up make verify (parallel network probes).
+- Optional: image signing (cosign) with an admission check, after the SBOM step.
+- 16 GB resize (Ollama 4 Gi, Postgres 768 Mi): not applied, by choice. The files already hold the new
+  sizes, so the next `make platform` run will apply them.
+- Next: Phase 5 (Postgres for prod moves to AWS RDS).
