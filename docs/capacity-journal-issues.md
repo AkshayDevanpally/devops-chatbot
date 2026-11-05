@@ -19,6 +19,7 @@ that shipped the pages to prod, and led to a real fix for dropped requests durin
 | 11 | A build waiting for prod approval blocked the next build | Pipeline | Fixed |
 | 12 | Build #4 went red although prod was deployed, and nothing rolled back | Pipeline | Fixed |
 | 13 | Milestones rejected by Jenkins: "Missing required parameter: ordinal" | Pipeline | Fixed |
+| 14 | Build #6 tests failed: automatic OS updates restarted the build agent mid-build | Host OS | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -243,3 +244,37 @@ WorkflowScript: 77: Missing required parameter: "ordinal" @ line 77, column 9.
 
 **Lesson:** validate a Jenkinsfile against the running Jenkins before pushing; a syntax error only shows up
 as a failed build otherwise.
+
+### Issue 14 — Build #6 tests failed: automatic OS updates restarted the build agent mid-build
+
+**Symptom:** build #6's Test stage failed with three database errors:
+
+```text
+11:36:32  ERROR tests/test_retention.py::test_only_first_50_users_are_stored - psycopg....
+11:36:32  ERROR tests/test_retention.py::test_only_last_15_chats_per_user_are_kept - ps...
+11:36:32  ERROR tests/test_retention.py::test_migration_is_idempotent - psycopg.Operati...
+11:36:32  8 passed, 3 errors in 0.75s
+E           psycopg.OperationalError: [Errno -3] Temporary failure in name resolution
+```
+
+**Investigation:** the test failure was a symptom. Just before it, the build log said:
+
+```text
+06:06:06  host-agent seems to be removed or offline (ChannelClosedException ...)
+06:06:32  host-agent is back online
+```
+
+The agent's systemd journal showed it was told to stop at 06:05:56, not that it crashed. At 06:05:33
+Ubuntu's unattended-upgrades started (libpcre2-8-0, bind9 libraries); its `needrestart` step then restarted
+every service using an old copy of an updated library at the same moment: journald, ssh, cron and
+jenkins-agent.
+
+**Cause:** stopping the agent interrupted `scripts/test.sh`, whose cleanup removed the throwaway Postgres
+container while the test container kept running, so the database name no longer resolved.
+
+**Fix:** `scripts/09a-jenkins-agent.sh` writes `/etc/needrestart/conf.d/50-jenkins-agent.conf` so needrestart
+never restarts the agent. Security updates still install; the agent picks up new libraries when it is
+restarted by hand while no build is running (`sudo systemctl restart jenkins-agent`). Build re-run afterwards.
+
+**Lesson:** when a test fails with an error that makes no sense for the code, read the lines just above it.
+Here the real event was the agent going offline, and the cause was outside Jenkins entirely.

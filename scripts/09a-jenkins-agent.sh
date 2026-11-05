@@ -65,6 +65,17 @@ printf '%s' "$SECRET" > "$ETC/secret"; chown root:"$AGENT_USER" "$ETC/secret"; c
 curl -sf --cacert "$CA" -o "$ETC/agent.jar" "$URL/jnlpJars/agent.jar"
 chmod 0644 "$ETC/agent.jar"                                  # root-owned: the agent can't replace it
 
+echo "==> keep automatic updates from restarting the agent mid-build"
+# Ubuntu's unattended-upgrades runs needrestart, which restarts every service using an updated
+# library. That killed a running build once (docs/capacity-journal-issues.md, Issue 14). The agent
+# still gets the update: restart it when no build is running (sudo systemctl restart jenkins-agent).
+if [[ -d /etc/needrestart/conf.d ]]; then
+  cat > /etc/needrestart/conf.d/50-jenkins-agent.conf <<'NR'
+# Never auto-restart the Jenkins agent: it would kill the running build.
+$nrconf{override_rc}{qr(^jenkins-agent\.service$)} = 0;
+NR
+fi
+
 echo "==> systemd service"
 cat > /etc/systemd/system/jenkins-agent.service <<UNIT
 [Unit]
