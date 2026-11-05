@@ -6,6 +6,8 @@ Problems hit on 4–5 November 2026:
 - Issues 10–13: pipeline hardening (automatic rollback, non-blocking approvals, faster verify) and the mistakes along the way.
 - Issue 14: automatic Ubuntu updates restarting the build agent in the middle of build #6.
 - Issue 15: build #7 stopped by a vulnerability published overnight in the chat-api base image.
+- Issues 16–18: builds #8, #10 and #11 (5 November): a failed GitHub fetch, and the new Architecture page's
+  check failing in dev, plus the mistakes made while fixing it. Build #12 then shipped to prod.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -24,6 +26,9 @@ Problems hit on 4–5 November 2026:
 | 13 | Milestones rejected by Jenkins: "Missing required parameter: ordinal" | Pipeline | Fixed |
 | 14 | Build #6 tests failed: automatic OS updates restarted the build agent mid-build | Host OS | Fixed |
 | 15 | Build #7 security scan failed: new CVE in apt inside the Python base image | Security / images | Fixed |
+| 16 | Build #8 failed before any stage: Jenkins couldn't reach GitHub | Network | Passed on rerun (cause not confirmed) |
+| 17 | Builds #10 and #11 failed "Architecture page served" in dev and rolled back | Testing / deploy | Fixed |
+| 18 | Mistakes: a known issue repeated, a wrong first diagnosis, two deploys to dev at once | Process | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -305,3 +310,92 @@ Rebuilt and rescanned: 0 HIGH/CRITICAL in both images.
 
 **Lesson:** the scan doing its job. A pipeline that blocks on new CVEs will stop on days when nothing in the
 code changed; pulling the distribution's security fixes at build time keeps it green without ignoring anything.
+
+### Issue 16 — Build #8 failed before any stage: Jenkins couldn't reach GitHub
+
+**Symptom:** build #8 (started 06:25 UTC by the push of `a976b13`) failed in about a minute, before Checkout. Jenkins
+could not load the Jenkinsfile:
+
+```text
+hudson.plugins.git.GitException: Command "git fetch --tags --force --progress --prune -- origin +refs/heads/master:refs/remotes/origin/master" returned status code 128:
+stderr: ssh: connect to host github.com port 22: Network is unreachable
+fatal: Could not read from remote repository.
+```
+
+**What we know:** the same commit had been pushed from this server two minutes earlier, so the host had internet
+access. The system log shows Wi-Fi connected the whole time (last rekey 06:17, next disconnect 06:47), and no
+link or DHCP change at 06:25. "Network is unreachable" means the Jenkins pod had no route at that moment, so the
+problem was on the pod or cluster network side, not GitHub or the deploy key.
+
+**Cause:** not confirmed; the error did not recur. Later that morning the server was shut down (09:48 UTC) and
+came back at 14:06 with a new LAN address (192.168.1.104 on the wired port).
+
+**Resolution:** build #9 ran the same commit after the restart and passed every stage, including prod.
+
+**Lesson:** a failure before Checkout says nothing about the code, so check whether the next run of the same
+commit passes before changing anything. If it happens again, run `kubectl -n ci exec deploy/jenkins -- ip route`
+and a test `git ls-remote` from the pod while it is failing.
+
+### Issue 17 — Builds #10 and #11 failed "Architecture page served" in dev and rolled back
+
+**Symptom:** the push adding the Architecture page (`3ab766b`) passed Build, Test, the Trivy scan and SBOM, then
+failed in Deploy dev. Exactly one of the 25 checks failed, a new one added in the same commit:
+
+```text
+PASS  Pulse page served
+FAIL  Architecture page served
+...
+passed: 24   failed: 1
+!! verification failed in dev: rolling back to revision 15
+!! dev is back on revision 15. 3ab766b was NOT kept. Fix the failure and push again.
+```
+
+Automatic rollback (Issue 12) worked: dev went back to the previous release and qa and prod were never touched.
+Build #11, started by hand for the same commit, failed the same way.
+
+**Checks that ruled things out:**
+- The image the pipeline built was fine: run on its own, `localhost:5000/ui:3ab766b` served `/architecture/` with
+  200 and the right title, and the strict CSP stayed intact.
+- Ingress and Helm were fine: the ingress sends every path except `/api` to the ui.
+- After deploying `3ab766b` to dev by hand, the page answered 200 (48 KB) every time.
+
+**Cause:** two things, both fixed:
+1. **`grep -q` + `pipefail` again (Issue 6).** The check was
+   `curl -sf $URL/architecture/ | grep -q '<title>Architecture'`. `grep -q` stops reading at the first match, near
+   the top of the 48 KB page. Over TLS the page arrives in chunks, so curl is often still writing and fails, and
+   with `pipefail` the whole check fails. The Pulse page passes the same pattern because it is small. Build #11
+   proves this: dev was already serving the page when its check ran, and the check still failed. It's a race,
+   so the same command often passes when run by hand.
+2. **Old pods still answering just after the rollout.** Verification starts once the app answers steadily, but
+   that wait only probes `/` and `/api/status`, which the old release also serves. Requests that reach a
+   terminating old ui pod get its fallback `index.html` for `/architecture/` (no "Architecture" title).
+
+**Fix (commit `ceda217`):**
+- The check reads the whole body: `grep '<title>Architecture' >/dev/null`, the same as the Journal check.
+- `scripts/07-verify.sh` first waits (up to 60 s) until no pod in the namespace is terminating, then runs the
+  steady-answer wait and the checks. Every check now tests the new release only.
+
+Build #12 passed all 25 checks in dev, qa and prod; prod was approved by admin and runs `ceda217`.
+
+**Lesson:** a check for a new page or feature can't pass against the old release, so verification must not start
+until the old pods are gone. And with `pipefail`, never put `grep -q` or `head` after curl.
+
+### Issue 18 — Mistakes: a known issue repeated, a wrong first diagnosis, two deploys to dev at once
+
+**What happened:**
+- **The check repeated Issue 6.** That entry already says to avoid `grep -q` after curl under `pipefail`, but the new
+  check was copied from the Pulse line, which uses `grep -q` and only passes because Pulse's response is small.
+- **The first diagnosis was dropped too early.** `grep -q` was the first suspect, but a local test (plain HTTP,
+  page fits in the pipe buffer) passed, so it was set aside for the "old pods" theory. Build #11's failure, with the
+  page already live in dev, showed that both causes were real.
+- **Two deploys to dev at once.** While investigating, `3ab766b` was deployed to dev by hand at 14:59. At the same time
+  build #11, started from the Jenkins UI at 14:57, was deploying the same commit to dev, so the two deploys
+  overlapped. No harm done (same image, dev only), but the result of each one was harder to read.
+
+**Fix:** the Pulse check was left alone (it passes reliably), but every new check uses `grep ... >/dev/null`.
+Before deploying by hand, check that no pipeline build is running:
+`curl ... /job/chatbot/lastBuild/api/json?tree=building`.
+
+**Lesson:** read the existing issues log before adding a check. When a local test clears a suspect, ask whether
+it reproduced the real conditions (TLS, chunked transfer, timing) before moving on.
+
