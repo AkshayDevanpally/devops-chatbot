@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/architecture/architecture.css">
+</head>
+<body>
+  <header>
+    <div class="brand">Qwen<span>Ops</span></div>
+    <nav><a href="/">Chat</a><a href="/pipeline/">Pipeline</a><a href="/dev/">Be a Dev</a><a href="/pulse/">Pulse</a><a href="/capacity/">Capacity</a><a href="/journal/">Journal</a><a href="/architecture/">Architecture</a></nav>
+    <div class="env">local</div>
+  </header>
+  <main class="wide arch">
+<!-- shared arrowheads -->
+<svg class="defs-svg" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+    <marker id="ah-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-a"/></marker>
+    <marker id="ah-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-d"/></marker>
+    <marker id="ah-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-p"/></marker>
+  </defs>
+</svg>
+<div class="arch-head">
+  <div class="eyebrow">QwenOps · last updated 5 Nov 2026</div>
+  <h1>QwenOps Architecture</h1>
+  <p class="lede">Everything that runs on the home server today: the k3s cluster and its namespaces, Docker and the local registry, the Jenkins pipeline with Trivy, the network rules between every piece, and the planned link from AWS.</p>
+  <div class="pills">
+    <span class="pill live">● Live: phases 1–4</span>
+    <span class="pill">qwen2.5:0.5b on CPU</span>
+    <span class="pill">16 GB · 4 cores</span>
+    <span class="pill plan">○ Planned: phases 5–9</span>
+  </div>
+  <nav class="toc" aria-label="Sections">
+    <a href="#overview"><span>1</span>Overview map</a>
+    <a href="#request"><span>2</span>A request, end to end</a>
+    <a href="#network"><span>3</span>Network rules</a>
+    <a href="#pipeline"><span>4</span>CI/CD pipeline</a>
+    <a href="#security"><span>5</span>Security layers</a>
+    <a href="#compose"><span>6</span>Docker Compose mode</a>
+    <a href="#budget"><span>7</span>Resource budget</a>
+    <a href="#next"><span>8</span>Next: AWS burst</a>
+  </nav>
+</div>
+
+<!-- 1. OVERVIEW -->
+<section id="overview">
+  <div class="sec-head">
+    <h2>1 · Overview map</h2>
+    <p>One physical machine. Inside it, k3s runs the apps and the shared platform; outside k3s, Docker hosts the image registry and the Jenkins build agent runs as a systemd service.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1200 1010" role="img" aria-label="The home server runs k3s with kube-system, ci and cert-manager namespaces on top, three app namespaces in the middle, and shared ai, data and monitoring namespaces below. Docker, the Jenkins agent and host hardening sit outside k3s. The browser reaches Traefik over HTTPS; Jenkins polls GitHub.">
+      <!-- external -->
+      <rect class="ext" x="60" y="20" width="340" height="80" rx="6"/>
+      <text x="76" y="44" class="b">Your laptop or phone</text>
+      <text x="76" y="64" class="s">Browser · hosts file points to 192.168.1.104</text>
+      <text x="76" y="82" class="s">Trusts certs/chatbot-local-ca.crt</text>
+
+      <rect class="ext" x="430" y="20" width="340" height="80" rx="6"/>
+      <text x="446" y="44" class="b">GitHub · private repo</text>
+      <text x="446" y="64" class="s">master branch · read-only deploy key</text>
+      <text x="446" y="82" class="s">Every push runs the pipeline</text>
+
+      <rect class="ext" x="800" y="20" width="340" height="80" rx="6"/>
+      <text x="816" y="44" class="b">Public internet</text>
+      <text x="816" y="64" class="s">Ollama model registry · image and package mirrors</text>
+      <text x="816" y="82" class="s">Reached only by Ollama, Jenkins and host builds</text>
+
+      <!-- host -->
+      <rect class="g-host" x="20" y="130" width="1160" height="870" rx="10"/>
+      <text x="40" y="155" class="lab">HOME SERVER</text>
+      <text x="1160" y="155" text-anchor="end" class="s">Ubuntu 26.10 · 192.168.1.104 wired / .105 Wi-Fi · 16 GB RAM · 4 cores</text>
+
+      <!-- k3s -->
+      <rect class="g-k3s" x="40" y="170" width="1120" height="630" rx="8"/>
+      <text x="60" y="194" class="lab">K3S CLUSTER</text>
+      <text x="1140" y="194" text-anchor="end" class="s">k3s v1.36.5 · containerd · Flannel pods 10.42.0.0/24 · NetworkPolicy enforced</text>
+
+      <!-- row A -->
+      <rect class="ns-sys" x="60" y="210" width="340" height="135" rx="6"/>
+      <text x="76" y="230" class="m b">kube-system</text>
+      <rect class="node" x="76" y="245" width="158" height="84" rx="4"/>
+      <text x="88" y="266" class="b">Traefik ingress</text>
+      <text x="88" y="284" class="m">:80 → 301 HTTPS</text>
+      <text x="88" y="300" class="m">:443 TLS + HSTS</text>
+      <text x="88" y="316" class="s">LoadBalancer on .104</text>
+      <text x="250" y="266" class="s">CoreDNS</text>
+      <text x="250" y="284" class="s">metrics-server</text>
+      <text x="250" y="302" class="s">local-path storage</text>
+      <text x="250" y="320" class="s">API server :6443</text>
+
+      <rect class="ns-ci" x="430" y="210" width="340" height="135" rx="6"/>
+      <text x="446" y="230" class="m b">ci</text>
+      <rect class="node" x="446" y="245" width="168" height="84" rx="4"/>
+      <text x="458" y="266" class="b">Jenkins controller</text>
+      <text x="458" y="284" class="m">:8080 · JCasC</text>
+      <text x="458" y="300" class="s">PVC 10 Gi</text>
+      <text x="458" y="316" class="s">jenkins.chatbot.local</text>
+      <text x="628" y="266" class="s">SA jenkins-deployer</text>
+      <text x="628" y="284" class="s">→ dev / qa / prod only</text>
+      <text x="628" y="302" class="s">egress :22 and :443</text>
+      <text x="628" y="320" class="s">ingress: Traefik only</text>
+
+      <rect class="ns-sys" x="800" y="210" width="340" height="135" rx="6"/>
+      <text x="816" y="230" class="m b">cert-manager</text>
+      <rect class="node" x="816" y="245" width="158" height="84" rx="4"/>
+      <text x="828" y="266" class="b">cert-manager</text>
+      <text x="828" y="284" class="s">controller · webhook</text>
+      <text x="828" y="300" class="s">cainjector</text>
+      <text x="828" y="316" class="s">no internet access</text>
+      <text x="988" y="266" class="s">ClusterIssuer</text>
+      <text x="988" y="284" class="m">chatbot-local-ca</text>
+      <text x="988" y="302" class="s">ECDSA P-256 CA</text>
+      <text x="988" y="320" class="s">signs every Ingress cert</text>
+
+      <!-- browser and GitHub links -->
+      <path class="flow" d="M155 100 V243" marker-end="url(#ah)"/>
+      <text x="163" y="120" class="m">HTTPS :443</text>
+      <path class="flow" d="M530 245 V102" marker-end="url(#ah)"/>
+      <text x="538" y="120" class="m">SSH :22 · polls every 2 min</text>
+
+      <!-- Traefik routing bus -->
+      <path class="flow" d="M155 329 V365 H970"/>
+      <path class="flow" d="M230 365 V383" marker-end="url(#ah)"/>
+      <path class="flow" d="M600 365 V383" marker-end="url(#ah)"/>
+      <path class="flow" d="M970 365 V383" marker-end="url(#ah)"/>
+      <text x="250" y="359" class="s">routes by hostname: dev.chatbot.local · qa.chatbot.local · chatbot.local</text>
+
+      <!-- row B: app namespaces -->
+      <rect class="ns-app" x="60" y="385" width="340" height="170" rx="6"/>
+      <text x="76" y="405" class="m b">chatbot-dev</text>
+      <text x="384" y="405" text-anchor="end" class="m s">dev.chatbot.local</text>
+      <rect class="node" x="76" y="420" width="140" height="72" rx="4"/>
+      <text x="88" y="441" class="b">ui · nginx</text>
+      <text x="88" y="459" class="m">:8080</text>
+      <text x="88" y="475" class="s">static pages</text>
+      <rect class="node" x="232" y="420" width="152" height="72" rx="4"/>
+      <text x="244" y="441" class="b">chat-api</text>
+      <text x="244" y="459" class="m">FastAPI :8000</text>
+      <text x="244" y="475" class="m">metrics :9100</text>
+      <text x="76" y="520" class="s">1 api + 1 ui · quota 768 Mi</text>
+      <text x="76" y="538" class="s">own DB chat_dev · own theme</text>
+
+      <rect class="ns-app" x="430" y="385" width="340" height="170" rx="6"/>
+      <text x="446" y="405" class="m b">chatbot-qa</text>
+      <text x="754" y="405" text-anchor="end" class="m s">qa.chatbot.local</text>
+      <rect class="node" x="446" y="420" width="140" height="72" rx="4"/>
+      <text x="458" y="441" class="b">ui · nginx</text>
+      <text x="458" y="459" class="m">:8080</text>
+      <text x="458" y="475" class="s">static pages</text>
+      <rect class="node" x="602" y="420" width="152" height="72" rx="4"/>
+      <text x="614" y="441" class="b">chat-api</text>
+      <text x="614" y="459" class="m">FastAPI :8000</text>
+      <text x="614" y="475" class="m">metrics :9100</text>
+      <text x="446" y="520" class="s">1 api + 1 ui · quota 768 Mi</text>
+      <text x="446" y="538" class="s">own DB chat_qa · same image as dev</text>
+
+      <rect class="ns-app" x="800" y="385" width="340" height="170" rx="6"/>
+      <text x="816" y="405" class="m b">chatbot-prod</text>
+      <text x="1124" y="405" text-anchor="end" class="m s">chatbot.local</text>
+      <rect class="node" x="816" y="420" width="140" height="72" rx="4"/>
+      <text x="828" y="441" class="b">ui · nginx ×2</text>
+      <text x="828" y="459" class="m">:8080</text>
+      <text x="828" y="475" class="s">static pages</text>
+      <rect class="node" x="972" y="420" width="152" height="72" rx="4"/>
+      <text x="984" y="441" class="b">chat-api ×2–3</text>
+      <text x="984" y="459" class="m">FastAPI :8000</text>
+      <text x="984" y="475" class="m">metrics :9100</text>
+      <text x="816" y="520" class="s">HPA 2–3 api at 70% CPU · PDB</text>
+      <text x="816" y="538" class="s">quota 1.5 Gi · deploy needs approval</text>
+
+      <!-- api to shared bus -->
+      <path class="flow" d="M308 492 V580 M678 492 V580 M1048 492 V580 M230 580 H1048"/>
+      <path class="flow" d="M230 580 V608" marker-end="url(#ah)"/>
+      <path class="flow" d="M600 580 V608" marker-end="url(#ah)"/>
+      <path class="flow" d="M970 580 V608" marker-end="url(#ah)"/>
+      <text x="330" y="574" class="s">only chat-api pods may call these</text>
+      <text x="238" y="600" class="m">:11434</text>
+      <text x="608" y="600" class="m">:5432</text>
+      <text x="978" y="600" class="m">:9090</text>
+
+      <!-- row C: shared -->
+      <rect class="ns-shared" x="60" y="610" width="340" height="170" rx="6"/>
+      <text x="76" y="630" class="m b">ai</text>
+      <text x="384" y="630" text-anchor="end" class="s">one model for all envs</text>
+      <rect class="node" x="76" y="645" width="170" height="80" rx="4"/>
+      <text x="88" y="666" class="b">Ollama 0.30.10</text>
+      <text x="88" y="684" class="m">:11434</text>
+      <text x="88" y="700" class="m">qwen2.5:0.5b</text>
+      <text x="88" y="716" class="s">PVC 5 Gi for models</text>
+      <text x="262" y="666" class="s">limit 3 CPU · 4 Gi</text>
+      <text x="262" y="684" class="s">1 model loaded</text>
+      <text x="262" y="702" class="s">egress: internet :443</text>
+      <text x="262" y="720" class="s">(model download only)</text>
+      <text x="76" y="760" class="s">An init container pulls the model once.</text>
+
+      <rect class="ns-shared" x="430" y="610" width="340" height="170" rx="6"/>
+      <text x="446" y="630" class="m b">data</text>
+      <text x="754" y="630" text-anchor="end" class="s">one Postgres, all envs</text>
+      <rect class="node" x="446" y="645" width="170" height="80" rx="4"/>
+      <text x="458" y="666" class="b">Postgres 16</text>
+      <text x="458" y="684" class="m">:5432 · SCRAM</text>
+      <text x="458" y="700" class="s">PVC 2 Gi</text>
+      <text x="458" y="716" class="s">max 60 connections</text>
+      <text x="632" y="666" class="m">chat_dev</text>
+      <text x="632" y="684" class="m">chat_qa</text>
+      <text x="632" y="702" class="m">chat_prod</text>
+      <text x="632" y="720" class="s">1 login role per DB</text>
+      <text x="446" y="760" class="s pl">Planned: AWS burst pods reach it via WireGuard</text>
+
+      <rect class="ns-shared" x="800" y="610" width="340" height="170" rx="6"/>
+      <text x="816" y="630" class="m b">monitoring</text>
+      <text x="1124" y="630" text-anchor="end" class="s">private, not on ingress</text>
+      <rect class="node" x="816" y="645" width="170" height="80" rx="4"/>
+      <text x="828" y="666" class="b">Prometheus v3.5</text>
+      <text x="828" y="684" class="m">:9090</text>
+      <text x="828" y="700" class="s">scrapes every 15 s</text>
+      <text x="828" y="716" class="s">keeps 24 h / 300 MB</text>
+      <text x="1002" y="666" class="s">scrapes api :9100</text>
+      <text x="1002" y="684" class="s">+ kubelet :10250</text>
+      <text x="1002" y="702" class="s">feeds the Pulse and</text>
+      <text x="1002" y="720" class="s">Capacity pages</text>
+      <text x="816" y="760" class="s">Queried with fixed PromQL only.</text>
+
+      <!-- host band, outside k3s -->
+      <rect class="node" x="60" y="830" width="340" height="150" rx="6"/>
+      <text x="76" y="852" class="b">Docker Engine</text>
+      <text x="76" y="878" class="s">make test: throwaway</text>
+      <text x="76" y="894" class="s">Postgres + Python containers</text>
+      <text x="76" y="918" class="s">make compose: optional</text>
+      <text x="76" y="934" class="s">quick test (section 6)</text>
+      <rect class="ns-sys" x="250" y="865" width="136" height="70" rx="4"/>
+      <text x="262" y="886" class="b">registry:2</text>
+      <text x="262" y="904" class="m">127.0.0.1:5000</text>
+      <text x="262" y="920" class="s">localhost only</text>
+
+      <rect class="ns-ci" x="430" y="830" width="340" height="150" rx="6"/>
+      <text x="446" y="852" class="b">Jenkins agent (systemd service)</text>
+      <text x="446" y="876" class="s">user jenkins-agent · in the docker group</text>
+      <text x="446" y="894" class="s">docker build · hadolint · Trivy · helm</text>
+      <text x="446" y="912" class="s">kubeconfig → SA jenkins-deployer</text>
+      <text x="446" y="930" class="s">needrestart never restarts it mid-build</text>
+
+      <rect class="ns-sys" x="800" y="830" width="340" height="150" rx="6"/>
+      <text x="816" y="852" class="b">Host hardening</text>
+      <text x="816" y="876" class="s">AppArmor profile k8s-chatbot on every pod</text>
+      <text x="816" y="894" class="s">kernel protections · API audit log (7 days)</text>
+      <text x="816" y="912" class="s">Kubernetes secrets encrypted at rest</text>
+      <text x="816" y="930" class="s">4 GB swap · kubelet reserves 1.25 GB</text>
+
+      <!-- host band links -->
+      <path class="flow" d="M318 865 V802" marker-end="url(#ah)"/>
+      <text x="326" y="820" class="s">containerd pulls images</text>
+      <path class="flow" d="M600 830 V802" marker-end="url(#ah)"/>
+      <text x="608" y="820" class="s">helm → API :6443</text>
+      <path class="flow" d="M430 900 H388" marker-end="url(#ah)"/>
+      <text x="409" y="892" text-anchor="middle" class="m halo">push</text>
+      <path class="flow dash" d="M770 905 H785 V300 H772" marker-end="url(#ah)" marker-start="url(#ah)"/>
+      <text x="797" y="760" transform="rotate(-90 797 760)" class="m">WebSocket · HTTPS</text>
+    </svg>
+    </div>
+    <figcaption>Solid arrows are live traffic. The agent reaches Jenkins at https://jenkins.chatbot.local, which resolves to 127.0.0.1 on the server, so that WebSocket also goes through Traefik. Every pod runs under the restricted Pod Security Standard.</figcaption>
+    <div class="key">
+      <span><i class="lg-app"></i>App namespaces (one per environment)</span>
+      <span><i class="lg-shared"></i>Shared platform</span>
+      <span><i class="lg-sys"></i>System and TLS</span>
+      <span><i class="lg-ci"></i>CI/CD</span>
+      <span><i class="lg-plan"></i>Planned</span>
+    </div>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Address</th><th>What answers</th><th>Reachable from</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">https://chatbot.local</td><td>prod ui + /api</td><td>LAN, via hosts file → 192.168.1.104</td></tr>
+        <tr><td class="mono">https://qa.chatbot.local</td><td>qa ui + /api</td><td>LAN</td></tr>
+        <tr><td class="mono">https://dev.chatbot.local</td><td>dev ui + /api</td><td>LAN</td></tr>
+        <tr><td class="mono">https://jenkins.chatbot.local</td><td>Jenkins controller</td><td>LAN; the agent uses 127.0.0.1</td></tr>
+        <tr><td class="mono">127.0.0.1:5000</td><td>Image registry (plain HTTP)</td><td>This machine only</td></tr>
+        <tr><td class="mono">127.0.0.1:6443</td><td>Kubernetes API</td><td>This machine; the agent has a deploy-only token</td></tr>
+        <tr><td class="mono">127.0.0.1:8080</td><td>ui in Docker Compose mode</td><td>This machine only</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 2. REQUEST -->
+<section id="request">
+  <div class="sec-head">
+    <h2>2 · A request, end to end</h2>
+    <p>What happens when someone sends a chat message to prod.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1100 430" role="img" aria-label="The browser connects to Traefik on port 443, where TLS ends using a certificate from cert-manager. Traefik sends / to the nginx ui and /api to chat-api. chat-api calls Ollama for the answer, Postgres for history, and Prometheus for the dashboards.">
+      <rect class="ns-sys" x="290" y="20" width="200" height="64" rx="6"/>
+      <text x="306" y="44" class="b">cert-manager</text>
+      <text x="306" y="64" class="s">signs each env's cert</text>
+      <path class="flow dash" d="M390 84 V128" marker-end="url(#ah)"/>
+      <text x="398" y="110" class="s">TLS secret</text>
+
+      <rect class="ext" x="20" y="160" width="180" height="96" rx="6"/>
+      <text x="36" y="184" class="b">Browser</text>
+      <text x="36" y="204" class="m">chatbot.local</text>
+      <text x="36" y="222" class="s">hosts → 192.168.1.104</text>
+      <text x="36" y="240" class="s">trusts the local CA</text>
+
+      <rect class="ns-sys" x="290" y="130" width="200" height="150" rx="6"/>
+      <text x="306" y="154" class="b">Traefik (kube-system)</text>
+      <text x="306" y="176" class="m">websecure :443</text>
+      <text x="306" y="194" class="s">TLS ends here</text>
+      <text x="306" y="212" class="s">adds HSTS (1 day)</text>
+      <text x="306" y="230" class="s">routes by Host + path</text>
+      <text x="306" y="250" class="m">web :80 → 301</text>
+
+      <path class="flow-a" d="M200 185 H288" marker-end="url(#ah-a)"/>
+      <text x="244" y="177" text-anchor="middle" class="m">HTTPS :443</text>
+      <path class="flow dash" d="M288 235 H202" marker-end="url(#ah)"/>
+      <text x="244" y="253" text-anchor="middle" class="s">plain :80 → 301</text>
+
+      <rect class="ns-app" x="600" y="40" width="200" height="90" rx="6"/>
+      <text x="616" y="64" class="b">ui · nginx :8080</text>
+      <text x="616" y="84" class="s">HTML, JS, CSS</text>
+      <text x="616" y="102" class="s">CSP + security headers</text>
+
+      <rect class="ns-app" x="600" y="200" width="200" height="140" rx="6"/>
+      <text x="616" y="224" class="b">chat-api :8000</text>
+      <text x="616" y="244" class="s">FastAPI</text>
+      <text x="616" y="262" class="s">rate limits per user and IP</text>
+      <text x="616" y="280" class="s">signed HttpOnly uid cookie</text>
+      <text x="616" y="298" class="s">input validation</text>
+      <text x="616" y="320" class="m">metrics :9100 (private)</text>
+
+      <path class="flow-a" d="M490 160 L598 95" marker-end="url(#ah-a)"/>
+      <text x="548" y="118" text-anchor="middle" class="m halo">path /</text>
+      <path class="flow-a" d="M490 250 L598 262" marker-end="url(#ah-a)"/>
+      <text x="544" y="246" text-anchor="middle" class="m halo">path /api</text>
+
+      <rect class="ns-shared" x="900" y="150" width="180" height="70" rx="6"/>
+      <text x="916" y="174" class="b">Ollama :11434</text>
+      <text x="916" y="194" class="m">qwen2.5:0.5b</text>
+      <text x="916" y="212" class="s">streams tokens back</text>
+
+      <rect class="ns-shared" x="900" y="245" width="180" height="80" rx="6"/>
+      <text x="916" y="269" class="b">Postgres :5432</text>
+      <text x="916" y="289" class="m">chat_&lt;env&gt; database</text>
+      <text x="916" y="307" class="s">50 users · 15 chats each</text>
+
+      <rect class="ns-shared" x="900" y="345" width="180" height="70" rx="6"/>
+      <text x="916" y="369" class="b">Prometheus :9090</text>
+      <text x="916" y="389" class="s">fixed PromQL only</text>
+      <text x="916" y="407" class="s">for /api/pulse, /api/capacity</text>
+
+      <path class="flow-a" d="M800 230 L898 190" marker-end="url(#ah-a)"/>
+      <text x="846" y="200" text-anchor="middle" class="s halo">prompt</text>
+      <path class="flow-a" d="M800 285 H898" marker-end="url(#ah-a)"/>
+      <text x="849" y="278" text-anchor="middle" class="s halo">history</text>
+      <path class="flow-a" d="M800 320 L898 378" marker-end="url(#ah-a)"/>
+      <text x="842" y="362" text-anchor="middle" class="s halo">metrics</text>
+    </svg>
+    </div>
+    <figcaption>TLS ends at Traefik; traffic inside the cluster is plain HTTP but limited by network policy. The database enforces the limits itself with triggers: it refuses a 51st user and keeps only each user's newest 15 chats.</figcaption>
+  </figure>
+</section>
+
+<!-- 3. NETWORK -->
+<section id="network">
+  <div class="sec-head">
+    <h2>3 · Network rules: deny everything, then allow a few paths</h2>
+    <p>Every namespace starts with a default-deny NetworkPolicy for traffic in and out, plus DNS. These are the only other paths that exist.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1200 560" role="img" aria-label="Allowed paths: Traefik to ui on 8080 and to chat-api on 8000; chat-api to Ollama 11434, Postgres 5432 and Prometheus 9090; Prometheus scrapes chat-api on 9100 and the node on 6443 and 10250; Ollama to the public internet on 443. Ollama to Postgres is blocked. Every pod may use CoreDNS on 53.">
+      <rect class="ns-sys" x="30" y="210" width="180" height="70" rx="6"/>
+      <text x="46" y="236" class="b">Traefik</text>
+      <text x="46" y="256" class="m">kube-system</text>
+
+      <rect class="ns-app" x="300" y="60" width="330" height="390" rx="8"/>
+      <text x="316" y="84" class="lab">CHATBOT-DEV / QA / PROD</text>
+      <text x="316" y="102" class="s">default deny, in and out</text>
+      <rect class="node" x="340" y="120" width="250" height="70" rx="4"/>
+      <text x="356" y="146" class="b">ui pods</text>
+      <text x="356" y="166" class="m">listen :8080</text>
+      <rect class="node" x="340" y="290" width="250" height="90" rx="4"/>
+      <text x="356" y="316" class="b">chat-api pods</text>
+      <text x="356" y="336" class="m">:8000 app</text>
+      <text x="356" y="354" class="m">:9100 metrics</text>
+
+      <rect class="ns-shared" x="760" y="40" width="190" height="70" rx="6"/>
+      <text x="776" y="66" class="b">Ollama</text>
+      <text x="776" y="86" class="m">ai · :11434</text>
+      <rect class="ns-shared" x="760" y="200" width="190" height="70" rx="6"/>
+      <text x="776" y="226" class="b">Postgres</text>
+      <text x="776" y="246" class="m">data · :5432</text>
+      <rect class="ns-shared" x="760" y="350" width="190" height="70" rx="6"/>
+      <text x="776" y="376" class="b">Prometheus</text>
+      <text x="776" y="396" class="m">monitoring · :9090</text>
+
+      <rect class="ext" x="1010" y="40" width="170" height="70" rx="6"/>
+      <text x="1026" y="66" class="b">Public internet</text>
+      <text x="1026" y="86" class="s">private ranges excluded</text>
+      <rect class="ns-sys" x="1010" y="350" width="170" height="70" rx="6"/>
+      <text x="1026" y="376" class="b">Node IP</text>
+      <text x="1026" y="396" class="m">:6443 · :10250</text>
+
+      <rect class="ns-sys" x="340" y="480" width="250" height="56" rx="6"/>
+      <text x="356" y="504" class="b">CoreDNS (kube-system)</text>
+      <text x="356" y="524" class="s">every pod may use :53, nothing else</text>
+
+      <path class="flow-a" d="M210 235 L338 160" marker-end="url(#ah-a)"/>
+      <text x="270" y="192" text-anchor="middle" class="m halo">:8080</text>
+      <path class="flow-a" d="M210 255 L338 330" marker-end="url(#ah-a)"/>
+      <text x="270" y="296" text-anchor="middle" class="m halo">:8000</text>
+      <path class="flow-a" d="M590 300 L758 80" marker-end="url(#ah-a)"/>
+      <text x="676" y="186" text-anchor="middle" class="m halo">:11434</text>
+      <path class="flow-a" d="M590 325 L758 240" marker-end="url(#ah-a)"/>
+      <text x="680" y="276" text-anchor="middle" class="m halo">:5432</text>
+      <path class="flow-a" d="M590 350 L758 380" marker-end="url(#ah-a)"/>
+      <text x="700" y="354" text-anchor="middle" class="m halo">query :9090</text>
+      <path class="flow-a" d="M758 405 L592 370" marker-end="url(#ah-a)"/>
+      <text x="690" y="414" text-anchor="middle" class="m halo">scrape :9100</text>
+      <path class="flow-a" d="M950 75 H1008" marker-end="url(#ah-a)"/>
+      <text x="979" y="68" text-anchor="middle" class="m">:443</text>
+      <path class="flow-a" d="M950 385 H1008" marker-end="url(#ah-a)"/>
+      <text x="979" y="378" text-anchor="middle" class="s">scrape</text>
+      <path class="flow-a" d="M465 450 V478" marker-end="url(#ah-a)"/>
+      <text x="473" y="469" class="m">:53</text>
+
+      <path class="flow-d" d="M855 110 V198" marker-end="url(#ah-d)"/>
+      <circle class="x-mark" cx="855" cy="154" r="9"/>
+      <path class="x-line" d="M850 149 L860 159 M860 149 L850 159"/>
+      <text x="870" y="158" class="s dn">blocked: Ollama can't reach private IPs</text>
+    </svg>
+    </div>
+    <figcaption>Green arrows are the complete list of allowed paths for the app and shared namespaces. Each rule names both the namespace and the pod label, so a pod in the right namespace with the wrong label is still refused.</figcaption>
+  </figure>
+  <div class="grid">
+    <div class="blocked">
+      <strong>Blocked, and tested on every deploy by make verify</strong>
+      <ul>
+        <li>A random pod reaching Postgres, Ollama, Prometheus or the internet</li>
+        <li>Anyone but Prometheus reading the API's metrics port :9100</li>
+        <li>A privileged pod (rejected by Pod Security Admission)</li>
+        <li>TLS 1.1 and plain HTTP (plain HTTP gets a 301 instead)</li>
+      </ul>
+    </div>
+    <div class="info">
+      <h3>ci and cert-manager <span class="tag">own rules</span></h3>
+      <ul>
+        <li><b>Jenkins</b>: in from Traefik on :8080 only; out on :22 and :443 (GitHub, plugins)</li>
+        <li><b>cert-manager</b>: default deny; out to DNS and the API server only; its webhook takes :10250 from the API server</li>
+        <li><b>Known gap</b>: k3s applies egress rules a few seconds after a pod starts. Cilium or Calico would close it.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 4. PIPELINE -->
+<section id="pipeline">
+  <div class="sec-head">
+    <h2>4 · CI/CD: from git push to prod</h2>
+    <p>The Jenkins controller runs in k3s; the build itself runs on the host through the agent, because it needs Docker. One image, tagged with the commit SHA, moves through dev, qa and prod.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1200 560" role="img" aria-label="You push to GitHub; Jenkins polls it every 2 minutes and hands the build to the host agent over a WebSocket. Eight stages run in order: checkout, build, test, Trivy scan, SBOM and push to the local registry, deploy dev, deploy qa, and ship to prod after manual approval. Each deploy runs helm upgrade then verify; if verify fails, helm rolls back.">
+      <rect class="ext" x="40" y="30" width="200" height="70" rx="6"/>
+      <text x="56" y="56" class="b">You</text>
+      <text x="56" y="76" class="m">git push origin master</text>
+      <rect class="ext" x="330" y="30" width="230" height="70" rx="6"/>
+      <text x="346" y="56" class="b">GitHub</text>
+      <text x="346" y="76" class="s">private · read-only deploy key</text>
+      <rect class="ns-ci" x="650" y="30" width="230" height="70" rx="6"/>
+      <text x="666" y="56" class="b">Jenkins controller</text>
+      <text x="666" y="76" class="s">k3s namespace ci</text>
+      <rect class="ns-ci" x="970" y="30" width="200" height="70" rx="6"/>
+      <text x="986" y="56" class="b">Host agent</text>
+      <text x="986" y="76" class="s">runs every stage on the host</text>
+
+      <path class="flow" d="M240 65 H328" marker-end="url(#ah)"/>
+      <text x="284" y="58" text-anchor="middle" class="s">push</text>
+      <path class="flow" d="M650 65 H562" marker-end="url(#ah)"/>
+      <text x="606" y="58" text-anchor="middle" class="s">polls · 2 min</text>
+      <path class="flow dash" d="M882 65 H968" marker-end="url(#ah)" marker-start="url(#ah)"/>
+      <text x="925" y="58" text-anchor="middle" class="s">WebSocket</text>
+
+      <path class="flow" d="M1070 100 V140"/>
+      <path class="flow" d="M102 156 V140 H1110 V156"/>
+      <text x="110" y="132" class="s">every stage runs on the host agent, as user jenkins-agent</text>
+
+      <!-- stages: x = 40 + i*144, w 124 -->
+      <g>
+        <rect class="node" x="40" y="160" width="124" height="130" rx="5"/>
+        <text x="50" y="182" class="m s">01</text><text x="70" y="182" class="b">Checkout</text>
+        <text x="50" y="206" class="s">git clean -ffdx</text>
+        <text x="50" y="222" class="s">image tag = SHA</text>
+        <text x="50" y="278" class="m s">≤ 5 min</text>
+
+        <rect class="node" x="184" y="160" width="124" height="130" rx="5"/>
+        <text x="194" y="182" class="m s">02</text><text x="214" y="182" class="b">Build</text>
+        <text x="194" y="206" class="s">docker build</text>
+        <text x="194" y="222" class="s">hadolint lint</text>
+        <text x="194" y="238" class="s">chat-api + ui</text>
+        <text x="194" y="278" class="m s">≤ 20 min</text>
+
+        <rect class="node" x="328" y="160" width="124" height="130" rx="5"/>
+        <text x="338" y="182" class="m s">03</text><text x="358" y="182" class="b">Test</text>
+        <text x="338" y="206" class="s">ruff + pytest</text>
+        <text x="338" y="222" class="s">against a real</text>
+        <text x="338" y="238" class="s">Postgres</text>
+        <text x="338" y="278" class="m s">≤ 15 min</text>
+
+        <rect class="ns-deny" x="472" y="160" width="124" height="130" rx="5"/>
+        <text x="482" y="182" class="m s">04</text><text x="502" y="182" class="b">Trivy scan</text>
+        <text x="482" y="206" class="s">fails on fixable</text>
+        <text x="482" y="222" class="s">HIGH / CRITICAL</text>
+        <text x="482" y="238" class="s">CVEs</text>
+        <text x="482" y="278" class="m s">≤ 15 min</text>
+
+        <rect class="node" x="616" y="160" width="124" height="130" rx="5"/>
+        <text x="626" y="182" class="m s">05</text><text x="646" y="182" class="b">SBOM + push</text>
+        <text x="626" y="206" class="s">SPDX file per</text>
+        <text x="626" y="222" class="s">image (Trivy)</text>
+        <text x="626" y="238" class="s">push to :5000</text>
+        <text x="626" y="278" class="m s">≤ 10 min</text>
+
+        <rect class="ns-app" x="760" y="160" width="124" height="130" rx="5"/>
+        <text x="770" y="182" class="m s">06</text><text x="790" y="182" class="b">Deploy dev</text>
+        <text x="770" y="206" class="s">promote.sh dev</text>
+        <text x="770" y="222" class="s">verify, else</text>
+        <text x="770" y="238" class="s">roll back</text>
+        <text x="770" y="278" class="m s">≤ 15 min</text>
+
+        <rect class="ns-app" x="904" y="160" width="124" height="130" rx="5"/>
+        <text x="914" y="182" class="m s">07</text><text x="934" y="182" class="b">Deploy qa</text>
+        <text x="914" y="206" class="s">same image tag</text>
+        <text x="914" y="222" class="s">verify, else</text>
+        <text x="914" y="238" class="s">roll back</text>
+        <text x="914" y="278" class="m s">≤ 15 min</text>
+
+        <rect class="gate" x="1048" y="160" width="124" height="130" rx="5"/>
+        <text x="1058" y="182" class="m s">08</text><text x="1078" y="182" class="b">Ship to prod</text>
+        <text x="1058" y="206" class="s">you click</text>
+        <text x="1058" y="222" class="s">“Ship it”, then</text>
+        <text x="1058" y="238" class="s">the same checks</text>
+        <text x="1058" y="278" class="m s">waits ≤ 1 day</text>
+      </g>
+      <path class="flow" d="M164 225 H182" marker-end="url(#ah)"/>
+      <path class="flow" d="M308 225 H326" marker-end="url(#ah)"/>
+      <path class="flow" d="M452 225 H470" marker-end="url(#ah)"/>
+      <path class="flow" d="M596 225 H614" marker-end="url(#ah)"/>
+      <path class="flow" d="M740 225 H758" marker-end="url(#ah)"/>
+      <path class="flow" d="M884 225 H902" marker-end="url(#ah)"/>
+      <path class="flow" d="M1028 225 H1046" marker-end="url(#ah)"/>
+
+      <!-- row 3 -->
+      <rect class="node" x="40" y="360" width="260" height="110" rx="6"/>
+      <text x="56" y="384" class="b">What the pipeline may touch</text>
+      <text x="56" y="404" class="s">kubeconfig: SA ci/jenkins-deployer</text>
+      <text x="56" y="422" class="s">chatbot-dev / -qa / -prod only</text>
+      <text x="56" y="440" class="s">no cluster-wide or RBAC rights</text>
+      <text x="56" y="458" class="s">SBOMs archived with each build</text>
+
+      <rect class="ns-sys" x="340" y="360" width="230" height="80" rx="6"/>
+      <text x="356" y="384" class="b">Local registry</text>
+      <text x="356" y="404" class="m">127.0.0.1:5000</text>
+      <text x="356" y="422" class="s">registry:2 · tag = git SHA</text>
+      <path class="flow" d="M678 290 V322 H455 V358" marker-end="url(#ah)"/>
+      <text x="566" y="316" text-anchor="middle" class="s">docker push</text>
+
+      <rect class="node" x="690" y="360" width="230" height="70" rx="6"/>
+      <text x="706" y="384" class="b">helm upgrade --install</text>
+      <text x="706" y="404" class="m">chatbot-&lt;env&gt;</text>
+      <text x="706" y="420" class="m">image.tag=&lt;SHA&gt;</text>
+      <path class="flow" d="M570 400 H688" marker-end="url(#ah)"/>
+      <text x="629" y="393" text-anchor="middle" class="s">k3s pulls</text>
+
+      <path class="flow" d="M966 290 V310 M1110 290 V310 M822 310 H1110"/>
+      <path class="flow" d="M822 290 V358" marker-end="url(#ah)"/>
+
+      <rect class="node" x="690" y="460" width="230" height="80" rx="6"/>
+      <text x="706" y="484" class="b">07-verify.sh &lt;env&gt;</text>
+      <text x="706" y="504" class="s">TLS, headers, policies, PSA,</text>
+      <text x="706" y="522" class="s">DB isolation, metrics privacy</text>
+      <path class="flow" d="M805 430 V458" marker-end="url(#ah)"/>
+
+      <rect class="ns-app" x="970" y="360" width="200" height="70" rx="6"/>
+      <text x="986" y="384" class="b">✓ Release stays</text>
+      <text x="986" y="404" class="s">pipeline moves on</text>
+      <rect class="ns-deny" x="970" y="470" width="200" height="70" rx="6"/>
+      <text x="986" y="494" class="b">✕ helm rollback</text>
+      <text x="986" y="514" class="s">to the last good revision</text>
+      <path class="flow-a" d="M920 478 L968 412" marker-end="url(#ah-a)"/>
+      <text x="954" y="452" text-anchor="middle" class="s halo">pass</text>
+      <path class="flow-d" d="M920 505 H968" marker-end="url(#ah-d)"/>
+      <text x="944" y="498" text-anchor="middle" class="s halo">fail</text>
+    </svg>
+    </div>
+    <figcaption>Stages 6–8 all call scripts/promote.sh. A failed promotion leaves that environment on its previous release, so a red build never means a broken release is live. The approval gate doesn't hold the agent while it waits.</figcaption>
+  </figure>
+  <div class="grid">
+    <div class="info">
+      <h3>Trivy <span class="tag">two jobs</span></h3>
+      <ul>
+        <li><b>Scan</b>: <code>--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1</code>. Only problems with a fix available fail the build.</li>
+        <li><b>SBOM</b>: an SPDX JSON file per image, kept with the build.</li>
+        <li>In CI a missing Trivy fails the build; locally it only warns.</li>
+        <li>The Jenkins controller image is scanned too (<code>ci/jenkins/.trivyignore</code>).</li>
+      </ul>
+    </div>
+    <div class="info">
+      <h3>Images <span class="tag">build once</span></h3>
+      <ul>
+        <li><b>chat-api</b>: Python 3.12 slim, multi-stage, uid 10001</li>
+        <li><b>ui</b>: nginx unprivileged, uid 101; build also reads <code>docs/</code> for the Error Journal page</li>
+        <li>OCI labels carry the git SHA; <code>--pull</code> gets base-image fixes every build</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 5. SECURITY -->
+<section id="security">
+  <div class="sec-head">
+    <h2>5 · Security layers</h2>
+    <p>Each layer assumes the one above it can fail.</p>
+  </div>
+  <div class="grid">
+    <div class="info"><h3>Host <span class="tag">Ubuntu</span></h3><ul>
+      <li>AppArmor profile <code>k8s-chatbot</code>: no mounts, no writes to /proc</li>
+      <li>k3s <code>protect-kernel-defaults</code></li>
+      <li>API audit log, 7 days</li>
+      <li>Agent is a no-login system user</li></ul></div>
+    <div class="info"><h3>Cluster <span class="tag">k3s</span></h3><ul>
+      <li>Secrets encrypted at rest</li>
+      <li>kubeconfig mode 0600</li>
+      <li>Pipeline token limited to 3 namespaces</li>
+      <li>Prometheus discovery limited to the app namespaces</li></ul></div>
+    <div class="info"><h3>Pods <span class="tag">PSA restricted</span></h3><ul>
+      <li>Non-root, read-only root filesystem</li>
+      <li>All capabilities dropped, no privilege escalation</li>
+      <li>seccomp RuntimeDefault, no service-account token</li>
+      <li>Requests and limits, quota per namespace</li></ul></div>
+    <div class="info"><h3>Network <span class="tag">zero trust</span></h3><ul>
+      <li>Default deny in and out everywhere</li>
+      <li>Allow rules match namespace and pod label</li>
+      <li>Registry and API bound to localhost</li>
+      <li>Prometheus is not on the ingress</li></ul></div>
+    <div class="info"><h3>TLS <span class="tag">local CA</span></h3><ul>
+      <li>cert-manager, ECDSA P-256</li>
+      <li>CA key never leaves the cluster</li>
+      <li>HTTP → HTTPS 301, HSTS, TLS 1.1 refused</li>
+      <li>Secure, HttpOnly, signed cookies</li></ul></div>
+    <div class="info"><h3>Data and app <span class="tag">chat-api</span></h3><ul>
+      <li>One database and one login per environment</li>
+      <li>Limits enforced by DB triggers</li>
+      <li>Rate limits, CSP, input validation</li>
+      <li>Logs don't contain message text</li></ul></div>
+  </div>
+</section>
+
+<!-- 6. COMPOSE -->
+<section id="compose">
+  <div class="sec-head">
+    <h2>6 · Docker Compose mode</h2>
+    <p>The optional quick test before k3s (<code>make compose</code>). The same images run on three Docker networks instead of NetworkPolicies.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1100 330" role="img" aria-label="Seven containers. All join the internal backend network, which has no internet. Only ui also joins the frontend network and is published on 127.0.0.1:8080. Only ollama also joins the egress network to download the model.">
+      <text x="20" y="140" class="m">127.0.0.1:8080</text>
+      <path class="flow" d="M20 155 H118" marker-end="url(#ah)"/>
+
+      <path class="net net-front" d="M150 80 H330"/>
+      <text x="342" y="84" class="s">frontend</text>
+      <path class="flow" d="M180 80 V130"/>
+      <circle class="dot-front" cx="180" cy="80" r="5"/>
+
+      <rect class="ns-app" x="120" y="130" width="120" height="50" rx="5"/>
+      <text x="132" y="152" class="b">ui</text><text x="132" y="170" class="s">nginx :8080</text>
+      <rect class="ns-app" x="260" y="130" width="120" height="50" rx="5"/>
+      <text x="272" y="152" class="b">chat-api</text><text x="272" y="170" class="s">:8000</text>
+      <rect class="node" x="400" y="130" width="120" height="50" rx="5"/>
+      <text x="412" y="152" class="b">migrate</text><text x="412" y="170" class="s">one-shot schema</text>
+      <rect class="ns-shared" x="540" y="130" width="120" height="50" rx="5"/>
+      <text x="552" y="152" class="b">postgres</text><text x="552" y="170" class="s">volume pgdata</text>
+      <rect class="ns-shared" x="680" y="130" width="120" height="50" rx="5"/>
+      <text x="692" y="152" class="b">prometheus</text><text x="692" y="170" class="s">internal only</text>
+      <rect class="ns-shared" x="820" y="130" width="120" height="50" rx="5"/>
+      <text x="832" y="152" class="b">ollama</text><text x="832" y="170" class="s">volume models</text>
+      <rect class="node" x="960" y="130" width="120" height="50" rx="5"/>
+      <text x="972" y="152" class="b">ollama-pull</text><text x="972" y="170" class="s">pulls the model</text>
+
+      <path class="flow" d="M180 180 V240 M320 180 V240 M460 180 V240 M600 180 V240 M740 180 V240 M1020 180 V240 M880 180 V290"/>
+      <path class="net net-back" d="M110 240 H1090"/>
+      <circle class="dot-back" cx="180" cy="240" r="5"/><circle class="dot-back" cx="320" cy="240" r="5"/>
+      <circle class="dot-back" cx="460" cy="240" r="5"/><circle class="dot-back" cx="600" cy="240" r="5"/>
+      <circle class="dot-back" cx="740" cy="240" r="5"/><circle class="dot-back" cx="880" cy="240" r="5"/>
+      <circle class="dot-back" cx="1020" cy="240" r="5"/>
+      <text x="110" y="264" class="s">backend · internal: true · no internet access</text>
+
+      <path class="net net-egress" d="M860 290 H1050"/>
+      <circle class="dot-egress" cx="880" cy="290" r="5"/>
+      <path class="flow" d="M1052 290 H1088" marker-end="url(#ah)"/>
+      <text x="860" y="314" class="s">egress → internet (model download)</text>
+    </svg>
+    </div>
+    <figcaption>Every container runs with no-new-privileges and all capabilities dropped. Stop Compose before using k3s: both run their own Ollama and would compete for the 4 cores.</figcaption>
+  </figure>
+</section>
+
+<!-- 7. BUDGET -->
+<section id="budget">
+  <div class="sec-head">
+    <h2>7 · Resource budget</h2>
+    <p>Memory limits on the 16 GB host. CPU is the tighter resource: Ollama may use 3 of the 4 cores while it writes an answer.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Piece</th><th>Namespace</th><th class="num">Memory limit</th></tr></thead>
+      <tbody>
+        <tr><td>OS, k3s, Traefik, kubelet reserve</td><td>—</td><td class="num">~2.5 GB</td></tr>
+        <tr><td>Ollama (0.5b uses ~1 GB; room for 1.5b or 3b)</td><td class="mono">ai</td><td class="num">4 GB</td></tr>
+        <tr><td>Postgres (shared_buffers 256 MB)</td><td class="mono">data</td><td class="num">768 MB</td></tr>
+        <tr><td>Prometheus</td><td class="mono">monitoring</td><td class="num">384 MB</td></tr>
+        <tr><td>cert-manager, 3 pods</td><td class="mono">cert-manager</td><td class="num">240 MB</td></tr>
+        <tr><td>Jenkins controller (builds run on the host)</td><td class="mono">ci</td><td class="num">1.5 GB</td></tr>
+        <tr><td>prod: 2–3 api + 2 ui</td><td class="mono">chatbot-prod</td><td class="num">1.5 GB</td></tr>
+        <tr><td>dev and qa, 768 MB each</td><td class="mono">chatbot-dev/qa</td><td class="num">1.5 GB</td></tr>
+      </tbody>
+      <tfoot><tr><td>Total, leaving ~2.5 GB for builds and page cache</td><td></td><td class="num">~12.5 GB</td></tr></tfoot>
+    </table>
+  </div>
+</section>
+
+<!-- 8. NEXT -->
+<section id="next">
+  <div class="sec-head">
+    <h2>8 · Next: AWS burst, database stays home</h2>
+    <p>Decided on 5 Nov 2026: no RDS. When prod needs more than its 3 local API pods, Terraform creates burst compute in AWS. Those pods use the home Postgres through a tunnel, and everything in AWS is destroyed when load drops.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1100 270" role="img" aria-label="Planned. The home server's WireGuard client dials out to a WireGuard endpoint on the AWS burst node. Burst chat-api pods in AWS send SQL through the tunnel to Postgres at home. AWS holds no data.">
+      <rect class="g-host" x="20" y="20" width="470" height="230" rx="10"/>
+      <text x="40" y="46" class="lab">HOME SERVER · K3S</text>
+      <rect class="ns-shared" x="40" y="100" width="190" height="80" rx="6"/>
+      <text x="56" y="124" class="b">Postgres</text>
+      <text x="56" y="144" class="m">data · :5432</text>
+      <text x="56" y="162" class="s">TLS verify-full · SCRAM</text>
+      <rect class="node" x="280" y="100" width="190" height="80" rx="6"/>
+      <text x="296" y="124" class="b">WireGuard</text>
+      <text x="296" y="144" class="s">dials out to AWS</text>
+      <text x="296" y="162" class="s">no port forward needed</text>
+      <text x="40" y="226" class="s">Data never leaves home. Backups: nightly pg_dump (to do).</text>
+
+      <rect class="ns-plan" x="610" y="20" width="470" height="230" rx="10"/>
+      <text x="630" y="46" class="lab">AWS · TERRAFORM · DESTROYED WHEN IDLE</text>
+      <rect class="node" x="630" y="100" width="190" height="80" rx="6"/>
+      <text x="646" y="124" class="b">WireGuard endpoint</text>
+      <text x="646" y="144" class="m">UDP 51820</text>
+      <text x="646" y="162" class="s">on the burst node</text>
+      <rect class="ns-app" x="870" y="100" width="190" height="80" rx="6"/>
+      <text x="886" y="124" class="b">Burst chat-api pods</text>
+      <text x="886" y="144" class="s">prod overflow (Phase 6)</text>
+      <text x="886" y="162" class="s">readiness needs the DB</text>
+      <text x="630" y="226" class="s">Nothing here holds data, so terraform destroy is always safe.</text>
+
+      <path class="flow-p" d="M470 120 H628" marker-end="url(#ah-p)"/>
+      <text x="549" y="112" text-anchor="middle" class="s pl">1 · tunnel, dialled out</text>
+      <path class="flow" d="M868 160 H822" marker-end="url(#ah)"/>
+      <path class="flow-p" d="M630 160 H472" marker-end="url(#ah-p)"/>
+      <text x="551" y="178" text-anchor="middle" class="s pl">2 · SQL inside the tunnel</text>
+      <path class="flow" d="M280 140 H232" marker-end="url(#ah)"/>
+    </svg>
+    </div>
+    <figcaption>Because home dials out, a changed home IP (like today's move to .104) doesn't break the link. Each query from AWS adds about 20–60 ms. If the home server is down, AWS pods fail their readiness check, which is acceptable because the model also lives at home.</figcaption>
+  </figure>
+  <ol class="phases">
+    <li class="done"><b>1–3</b>Local stack: images, k3s, platform, Helm, verify, TLS with a local CA</li>
+    <li class="done"><b>4</b>Jenkins CI/CD with Trivy, SBOM, approvals and automatic rollback</li>
+    <li class="next"><b>5</b>WireGuard tunnel, Postgres TLS, NetworkPolicy rule for the tunnel subnet</li>
+    <li class="next"><b>6</b>AWS burst compute with Terraform, scraped with <code>cloud="aws"</code></li>
+    <li class="next"><b>7</b>Wake-on-LAN through SQS to a Raspberry Pi relay</li>
+    <li class="next"><b>8</b>Live Jenkins events on the Pipeline page; Colour page triggers theme-deploy</li>
+    <li class="next"><b>9</b>Secrets from a secrets manager (cost per secret to check)</li>
+  </ol>
+</section>
+
+<p class="arch-foot">Drawn from the repo's manifests, Helm values, scripts and Jenkinsfile. Source: <code>app-ui/public/architecture/index.html</code>; update it when the architecture changes.</p>
+  </main>
+  <script src="/config.js"></script>
+  <script src="/common.js"></script>
+</body>
+</html>

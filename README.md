@@ -16,7 +16,7 @@ browser ─HTTPS─► Traefik ingress (k3s, cert from cert-manager) ──► u
 | Path | What |
 |---|---|
 | `app-chat/` | FastAPI chat API, DB schema with retention triggers, tests, Dockerfile |
-| `app-ui/` | Chat page, CI/CD factory page (demo), "Be a Dev" colour page, **Pulse** live dashboard, nginx image |
+| `app-ui/` | Chat page, CI/CD factory page (demo), "Be a Dev" colour page, **Pulse** live dashboard, **Architecture** diagrams (`/architecture/`), nginx image |
 | `compose.yaml` | Quick test with Docker before Kubernetes |
 | `monitoring/` | Prometheus config for the Compose test |
 | `Jenkinsfile` | CI/CD pipeline: checkout → build → test → scan → SBOM + push → dev → qa → approved prod |

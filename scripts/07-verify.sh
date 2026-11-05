@@ -37,6 +37,7 @@ blocked "metrics not exposed publicly"     "curl -sf $URL/api/metrics"
 check "security headers on UI"        "curl -sI $URL/ | grep -qi content-security-policy"
 check "bad theme colour rejected"     "test \$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{\"color\":\"<script>\"}' $URL/api/theme) = 422"
 check "Pulse page served"             "curl -sf $URL/pulse/ | grep -q '<title>Pulse'"
+check "Architecture page served"      "curl -sf $URL/architecture/ | grep -q '<title>Architecture'"
 check "Pulse has live Prometheus data" "curl -sf $URL/api/pulse | grep -q '\"available\":true'"
 check "Capacity page has live data"   "curl -sf $URL/api/capacity | grep -q '\"available\":true'"
 # grep without -q reads the whole body: with pipefail, -q quitting early would make curl fail (SIGPIPE)

@@ -1,0 +1,112 @@
+/* Architecture page. Everything is scoped under .arch so the shared styles.css is unaffected.
+   Dark only, like the rest of the site; colours follow the site palette. */
+.arch {
+  --bg: #0b0f14; --surface: #121821; --fg: #e6edf3; --mute: #8b98a8; --line: #233041; --line-strong: #3a4a5e;
+  --host-bg: #0f141b;
+  --app: #3FC4A9; --app-bg: #11302A;
+  --shared: #95A2F2; --shared-bg: #1C2240;
+  --sys: #A3ACB5; --sys-bg: #1D2327;
+  --ci: #E6AB4D; --ci-bg: #33260E;
+  --deny: #F2776D; --deny-bg: #3B1714;
+  --plan: #C391EC; --plan-bg: #2A1A38;
+  --f-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--fg); font-size: 15px; line-height: 1.6; padding-bottom: 64px;
+}
+.defs-svg { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.arch h1, .arch h2, .arch h3 { text-wrap: balance; line-height: 1.15; margin: 0; }
+.arch h1 { font-size: clamp(28px, 5vw, 40px); letter-spacing: -0.01em; }
+.arch h2 { font-size: 22px; }
+.arch h3 { font-size: 16px; }
+.arch p { margin: 0; max-width: 68ch; }
+.arch code, .arch .mono { font-family: var(--f-mono); font-size: 0.9em; }
+.arch a { color: var(--app); }
+.arch a:focus-visible { outline: 2px solid var(--app); outline-offset: 2px; }
+
+.arch-head { display: grid; gap: 14px; margin-top: 12px; }
+.eyebrow { font: 600 12px var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+.lede { color: var(--mute); font-size: 17px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { font: 600 12px var(--f-mono); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); }
+.pill.live { border-color: var(--app); color: var(--app); }
+.pill.plan { border-color: var(--plan); color: var(--plan); border-style: dashed; }
+
+.toc { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 26px; padding-block: 12px; border-block: 1px solid var(--line); font-size: 14px; }
+.toc a { color: var(--fg); text-decoration: none; }
+.toc a:hover { color: var(--app); text-decoration: underline; }
+.toc span { font-family: var(--f-mono); color: var(--mute); margin-right: 4px; }
+
+.arch section { margin-top: 56px; display: grid; gap: 16px; scroll-margin-top: 16px; }
+.sec-head { display: grid; gap: 6px; }
+.sec-head p { color: var(--mute); }
+
+.arch figure { margin: 0; display: grid; gap: 10px; min-width: 0; }
+.sheet { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+.sheet svg { display: block; width: 100%; height: auto; min-width: 920px; }
+.arch figcaption { color: var(--mute); font-size: 14px; max-width: 80ch; }
+
+.key { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--mute); }
+.key i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; border: 1.5px solid; }
+.lg-app { background: var(--app-bg); border-color: var(--app) !important; }
+.lg-shared { background: var(--shared-bg); border-color: var(--shared) !important; }
+.lg-sys { background: var(--sys-bg); border-color: var(--sys) !important; }
+.lg-ci { background: var(--ci-bg); border-color: var(--ci) !important; }
+.lg-plan { background: var(--plan-bg); border-color: var(--plan) !important; border-style: dashed !important; }
+
+/* SVG styling, driven by the tokens above */
+.arch svg text { font-family: inherit; font-size: 12px; fill: var(--fg); }
+.arch svg .b { font-weight: 600; font-size: 13px; }
+.arch svg .s { font-size: 11px; fill: var(--mute); }
+.arch svg .m { font-family: var(--f-mono); font-size: 11px; }
+.arch svg .lab { font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; fill: var(--mute); }
+.arch svg .halo { paint-order: stroke; stroke: var(--surface); stroke-width: 5px; stroke-linejoin: round; }
+.arch svg .pl { fill: var(--plan); }
+.arch svg .dn { fill: var(--deny); }
+.g-host { fill: var(--host-bg); stroke: var(--line-strong); stroke-width: 1.5; }
+.g-k3s { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+.node { fill: var(--surface); stroke: var(--line-strong); }
+.ext { fill: var(--surface); stroke: var(--mute); stroke-dasharray: 5 4; }
+.ns-app { fill: var(--app-bg); stroke: var(--app); stroke-width: 1.3; }
+.ns-shared { fill: var(--shared-bg); stroke: var(--shared); stroke-width: 1.3; }
+.ns-sys { fill: var(--sys-bg); stroke: var(--sys); stroke-width: 1.3; }
+.ns-ci { fill: var(--ci-bg); stroke: var(--ci); stroke-width: 1.3; }
+.ns-deny { fill: var(--deny-bg); stroke: var(--deny); stroke-width: 1.3; }
+.ns-plan { fill: var(--plan-bg); stroke: var(--plan); stroke-width: 1.5; stroke-dasharray: 7 5; }
+.gate { fill: var(--ci-bg); stroke: var(--ci); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.flow { fill: none; stroke: var(--fg); stroke-width: 1.5; }
+.flow.dash { stroke-dasharray: 5 4; }
+.flow-a { fill: none; stroke: var(--app); stroke-width: 1.8; }
+.flow-d { fill: none; stroke: var(--deny); stroke-width: 1.6; stroke-dasharray: 5 4; }
+.flow-p { fill: none; stroke: var(--plan); stroke-width: 1.8; stroke-dasharray: 7 5; }
+.net { fill: none; stroke-width: 4; stroke-linecap: round; }
+.net-front { stroke: var(--app); } .net-back { stroke: var(--shared); } .net-egress { stroke: var(--ci); }
+.dot-front { fill: var(--app); } .dot-back { fill: var(--shared); } .dot-egress { fill: var(--ci); }
+/* markers live in a separate hidden svg, so they take literal fills from the tokens' values */
+.mk { fill: #e6edf3; } .mk-a { fill: #3FC4A9; } .mk-d { fill: #F2776D; } .mk-p { fill: #C391EC; }
+.x-mark { fill: var(--surface); stroke: var(--deny); stroke-width: 1.6; }
+.x-line { stroke: var(--deny); stroke-width: 2; }
+
+/* cards and tables */
+.arch .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; }
+.info { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.info h3 { display: flex; align-items: baseline; gap: 8px; }
+.info h3 .tag { font: 600 11px var(--f-mono); color: var(--mute); letter-spacing: 0.05em; text-transform: uppercase; }
+.info ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; }
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.arch table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+.arch th, .arch td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.arch th { font: 600 12px var(--f-mono); color: var(--mute); text-transform: uppercase; letter-spacing: 0.05em; }
+.arch tr:last-child td { border-bottom: 0; }
+.arch .num { text-align: right; font-family: var(--f-mono); white-space: nowrap; }
+.arch tfoot td { font-weight: 600; }
+.blocked { display: grid; gap: 6px; padding: 14px 18px; background: var(--deny-bg); border: 1px solid var(--deny); border-radius: 10px; font-size: 14px; }
+.blocked strong { color: var(--deny); }
+.blocked ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.phases { list-style: none; margin: 0; padding: 0; display: grid; border-left: 2px solid var(--line); }
+.phases li { padding: 6px 0 10px 18px; position: relative; font-size: 14px; }
+.phases li::before { content: ""; position: absolute; left: -7px; top: 12px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 2px solid var(--line-strong); }
+.phases li.done::before { background: var(--app); border-color: var(--app); }
+.phases li.next::before { border-color: var(--plan); border-style: dashed; }
+.phases b { font-family: var(--f-mono); font-size: 13px; margin-right: 6px; }
+.arch-foot { margin-top: 56px; color: var(--mute); font-size: 13px; border-top: 1px solid var(--line); padding-top: 14px; }
+@media (max-width: 600px) { .arch { font-size: 14px; } .lede { font-size: 15px; } }
