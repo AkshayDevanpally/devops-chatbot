@@ -1,8 +1,10 @@
-# Capacity & Error Journal pages — issues log
+# Capacity & Error Journal pages, pipeline hardening — issues log
 
-Problems hit while adding the Capacity page (local hardware vs AWS) and the Error Journal page,
-on 4 November 2026. Issues 1–8 were found while testing on dev. Issue 9 came from the first pipeline run
-that shipped the pages to prod, and led to a real fix for dropped requests during every deploy.
+Problems hit on 4–5 November 2026:
+- Issues 1–8: adding the Capacity page (local hardware vs AWS) and the Error Journal page, found while testing on dev.
+- Issue 9: the first pipeline run that shipped the pages to prod, which led to a fix for dropped requests during every deploy.
+- Issues 10–13: pipeline hardening (automatic rollback, non-blocking approvals, faster verify) and the mistakes along the way.
+- Issue 14: automatic Ubuntu updates restarting the build agent in the middle of build #6.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
