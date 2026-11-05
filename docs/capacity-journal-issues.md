@@ -5,6 +5,7 @@ Problems hit on 4–5 November 2026:
 - Issue 9: the first pipeline run that shipped the pages to prod, which led to a fix for dropped requests during every deploy.
 - Issues 10–13: pipeline hardening (automatic rollback, non-blocking approvals, faster verify) and the mistakes along the way.
 - Issue 14: automatic Ubuntu updates restarting the build agent in the middle of build #6.
+- Issue 15: build #7 stopped by a vulnerability published overnight in the chat-api base image.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -22,6 +23,7 @@ Problems hit on 4–5 November 2026:
 | 12 | Build #4 went red although prod was deployed, and nothing rolled back | Pipeline | Fixed |
 | 13 | Milestones rejected by Jenkins: "Missing required parameter: ordinal" | Pipeline | Fixed |
 | 14 | Build #6 tests failed: automatic OS updates restarted the build agent mid-build | Host OS | Fixed |
+| 15 | Build #7 security scan failed: new CVE in apt inside the Python base image | Security / images | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -280,3 +282,26 @@ restarted by hand while no build is running (`sudo systemctl restart jenkins-age
 
 **Lesson:** when a test fails with an error that makes no sense for the code, read the lines just above it.
 Here the real event was the agent going offline, and the cause was outside Jenkins entirely.
+
+### Issue 15 — Build #7 security scan failed: new CVE in apt inside the Python base image
+
+**Symptom:** build #7 passed Checkout, Build and Test, then stopped at Security scan; nothing was deployed.
+
+```text
+==> scan chat-api:47c7ec5 (fails on HIGH/CRITICAL with a fix available)
+localhost:5000/chat-api:47c7ec5 (debian 13.7)
+Total: 2 (HIGH: 2, CRITICAL: 0)
+│ apt           │ CVE-2026-109518 │ HIGH │ fixed │ 3.0.3 │ 3.0.4 │ On Debian, Ubuntu, and derivative Linux distributions, an on-path atta ...
+│ libapt-pkg7.0 │                 │      │       │       │       │
+```
+
+**Cause:** no code change. The CVE was published overnight; Debian already shipped apt 3.0.4 in
+`stable-security`, but the `python:3.12-slim` base image had not been rebuilt with it yet. The UI image
+(Alpine, already running `apk upgrade`) was clean.
+
+**Fix:** the chat-api runtime stage runs `apt-get update && apt-get upgrade -y` (upgrades only, no new
+packages, apt lists removed afterwards), the same approach the UI image uses with `apk upgrade`.
+Rebuilt and rescanned: 0 HIGH/CRITICAL in both images.
+
+**Lesson:** the scan doing its job. A pipeline that blocks on new CVEs will stop on days when nothing in the
+code changed; pulling the distribution's security fixes at build time keeps it green without ignoring anything.
