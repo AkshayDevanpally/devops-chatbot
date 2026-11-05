@@ -3,14 +3,18 @@
 //
 // One image per commit, tagged with the short Git SHA, promoted unchanged dev -> qa -> prod.
 // Every stage runs on the host agent (label "docker"); the prod approval waits WITHOUT holding it.
+//
+// Builds may overlap, so a build waiting for prod approval never blocks newer pushes:
+// - each stage checks out this build's own commit (overlapping builds can't share files);
+// - milestones keep deploys in commit order: once a newer build passes one, older builds that
+//   haven't reached it yet are cancelled. Approving a newer build cancels older ones still waiting.
+// Deploys go through scripts/promote.sh: deploy, verify, and roll back automatically on failure.
 pipeline {
   agent none
 
   options {
     timestamps()
-    disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
-    skipDefaultCheckout()
   }
 
   environment {
@@ -23,7 +27,6 @@ pipeline {
       agent { label 'docker' }
       options { timeout(time: 5, unit: 'MINUTES') }
       steps {
-        checkout scm
         sh 'git clean -ffdx'    // the agent keeps its workspace between builds
         script {
           env.TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
@@ -71,8 +74,8 @@ pipeline {
       agent { label 'docker' }
       options { timeout(time: 15, unit: 'MINUTES') }
       steps {
-        sh './scripts/06-deploy.sh dev "$TAG"'
-        sh './scripts/07-verify.sh dev'
+        milestone(ordinal: 10, label: 'deploy-dev')
+        sh './scripts/promote.sh dev "$TAG"'
       }
     }
 
@@ -80,23 +83,25 @@ pipeline {
       agent { label 'docker' }
       options { timeout(time: 15, unit: 'MINUTES') }
       steps {
-        sh './scripts/06-deploy.sh qa "$TAG"'
-        sh './scripts/07-verify.sh qa'
+        milestone(ordinal: 20, label: 'deploy-qa')
+        sh './scripts/promote.sh qa "$TAG"'
       }
     }
 
     stage('Ship to prod') {
-      // Waits up to a day for a person to approve; the agent is free meanwhile.
+      // Waits up to a day for a person to approve; no agent is held while waiting.
+      agent none
       options { timeout(time: 1, unit: 'DAYS') }
-      input {
-        message 'Ship this build to prod?'
-        ok 'Ship it'
-      }
-      agent { label 'docker' }
-      environment { PROD_APPROVED = 'yes' }
       steps {
-        sh './scripts/06-deploy.sh prod "$TAG"'
-        sh './scripts/07-verify.sh prod'
+        milestone(ordinal: 30, label: 'awaiting-prod')
+        input message: "Ship ${env.TAG} to prod?", ok: 'Ship it'
+        milestone(ordinal: 40, label: 'deploy-prod')       // cancels older builds still waiting for approval
+        script {
+          node('docker') {
+            checkout scm
+            withEnv(['PROD_APPROVED=yes']) { sh './scripts/promote.sh prod "$TAG"' }
+          }
+        }
       }
     }
   }

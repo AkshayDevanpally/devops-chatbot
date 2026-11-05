@@ -27,7 +27,7 @@ SUMMARY
  12  Port forward showed "404 page not found"           Usage      Fixed (use the hostname)
  13  Build watcher never reported anything              Mistake    Found while writing this
  14  Extra "main" branch on GitHub                      Note       Fixed (deleted)
- 15  make verify takes about 3 minutes per environment  Note       Open (improvement)
+ 15  make verify takes about 3 minutes per environment  Note       Fixed (now ~30 s)
 
 
 DETAILS
@@ -147,10 +147,13 @@ DETAILS
     Jenkins builds master, so nothing broke. Fixed: master made the default branch and main
     deleted (it held only GitHub's two-line starter README).
 
-15. make verify takes about 3 minutes per environment (open, improvement)
+15. make verify takes about 3 minutes per environment (fixed)
     Deploy dev 223 s, Deploy qa 203 s, Ship to prod 253 s; most of that is make verify. Each of
     the four network probes waits 10 s (k3s policy-engine delay, see the Phase 3.4 log) plus pod
-    start-up. Possible fix: run the four probes from one pod, in parallel.
+    start-up.
+    Fixed (5 November 2026): one probe pod waits 10 s once, then tests all four targets and prints
+    "<host> <port> open|closed" per target. A control run confirmed it reports allowed targets
+    (cluster DNS) as open. Whole make verify: about 30 s instead of about 3 minutes.
 
 
 KEY TAKEAWAYS
@@ -186,7 +189,6 @@ app-ui/public/pipeline/pipeline.js  Demo log text matches the real stages
 OPEN ITEMS
 ----------
 - Before 2026-12-15: bump Jenkins to the next LTS and delete the guava entry in ci/jenkins/.trivyignore.
-- Optional: speed up make verify (parallel network probes).
 - Optional: image signing (cosign) with an admission check, after the SBOM step.
 - 16 GB resize (Ollama 4 Gi, Postgres 768 Mi): not applied, by choice. The files already hold the new
   sizes, so the next `make platform` run will apply them.

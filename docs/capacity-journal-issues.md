@@ -16,8 +16,9 @@ that shipped the pages to prod, and led to a real fix for dropped requests durin
 | 8 | hadolint flagged the named build context | Build | Fixed |
 | 9 | Build #4 "Ship to prod" failed: requests dropped during every rollout | Deploy | Fixed |
 | 10 | Mistake: a post-deploy failure was dismissed as a timing blip | Process | Fixed |
-| 11 | A build waiting for prod approval blocked the next build | Pipeline | Open (worked around) |
-| 12 | Build #4 went red although prod was deployed, and nothing rolled back | Pipeline | Open |
+| 11 | A build waiting for prod approval blocked the next build | Pipeline | Fixed |
+| 12 | Build #4 went red although prod was deployed, and nothing rolled back | Pipeline | Fixed |
+| 13 | Milestones rejected by Jenkins: "Missing required parameter: ordinal" | Pipeline | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -197,9 +198,9 @@ Every push that isn't shipped to prod holds up all later pushes until someone ap
 **Workaround:** build #3 was aborted by hand (prod untouched; build #4 contained the same commit and more) and a new
 build was started.
 
-**Possible fix (open):** make a newer build supersede an older one that is still waiting for approval, e.g.
-Jenkins `milestone` steps around the approval, or a much shorter approval timeout for builds that are not the
-latest commit.
+**Fix (5 November 2026):** builds may now overlap. The approval holds no agent, each stage checks out its own
+build's commit (so overlapping builds can't share files), and `milestone` steps keep deploys in commit order:
+approving a newer build cancels older builds still waiting at "Ship to prod".
 
 ### Issue 12 — Build #4 went red although prod was deployed, and nothing rolled back
 
@@ -210,6 +211,35 @@ live, and it stayed live: verify runs after the deploy, outside Helm's `--atomic
 **Risk:** if a verify failure is real, a broken release stays in prod until someone notices the red build and
 rolls back by hand (`helm rollback chatbot-prod <rev> -n chatbot-prod`).
 
-**Possible fix (open):** on a verify failure in prod, roll back to the previous Helm revision automatically and
-then fail the build, so "red" always means "prod is on the last good release". The steadiness wait added in
-Issue 9 makes false alarms that would trigger such a rollback much less likely.
+**Fix (5 November 2026):** every deploy (dev, qa, prod) goes through `scripts/promote.sh`: deploy, verify, and
+on failure roll back to the revision that was live before, then fail the build. Tested on dev with a simulated
+verification failure:
+
+```text
+Deployed 5ef1e72 to dev -> https://dev.chatbot.local
+FAIL  simulated verification failure
+!! verification failed in dev: rolling back to revision 12
+Rollback was a success! Happy Helming!
+14      Thu Nov  5 06:00:20 2026  deployed  chatbot-0.1.0  0.1.0  Rollback to 12
+!! dev is back on revision 12. 5ef1e72 was NOT kept. Fix the failure and push again.
+promote exit code: 1
+```
+
+### Issue 13 — Milestones rejected by Jenkins: "Missing required parameter: ordinal"
+
+**Symptom:** validating the new Jenkinsfile with Jenkins' own linter (`/pipeline-model-converter/validate`):
+
+```text
+WorkflowScript: 77: Missing required parameter: "ordinal" @ line 77, column 9.
+           milestone(label: 'deploy-dev')
+           ^
+```
+
+**Cause:** in scripted pipelines `milestone()` numbers itself; declarative pipelines require an explicit
+`ordinal`.
+
+**Fix:** ordinals 10, 20, 30, 40 (gaps leave room for new stages). The linter then reported
+"Jenkinsfile successfully validated".
+
+**Lesson:** validate a Jenkinsfile against the running Jenkins before pushing; a syntax error only shows up
+as a failed build otherwise.

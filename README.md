@@ -137,6 +137,13 @@ Every push to `master` runs the pipeline within ~2 minutes: the same SHA-tagged 
 (each verified with `make verify`), then waits up to a day for someone to click **Ship it** for prod.
 The SBOM for each image is attached to the build.
 
+- **Automatic rollback:** every deploy goes through `scripts/promote.sh` (deploy → verify). If verification
+  fails, that environment is rolled back to the release it had before and the build fails. A red build
+  never means a broken release is live.
+- **Builds don't block each other:** a build waiting for prod approval doesn't hold up newer pushes. Deploys
+  stay in commit order, and approving a newer build cancels older ones still waiting.
+- `make verify` takes about 30 s (all network checks run from one probe pod).
+
 How it's kept safe:
 - **Controller** (k3s): PSA restricted, read-only root FS, no Kubernetes API token, 0 executors, default-deny
   network (in: Traefik only; out: public SSH/HTTPS only), plugins baked into a scanned image, everything

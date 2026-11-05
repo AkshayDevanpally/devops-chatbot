@@ -56,19 +56,26 @@ blocked "privileged pod rejected in $NS" \
   "kubectl -n $NS run psa-test --image=busybox:1.36 --restart=Never --overrides='{\"spec\":{\"containers\":[{\"name\":\"t\",\"image\":\"busybox:1.36\",\"securityContext\":{\"privileged\":true}}]}}' --dry-run=server"
 
 echo "== NetworkPolicy =="
-# The probe waits 10 s first: k3s's policy engine (kube-router) applies egress rules a few seconds
-# after a pod starts, and connecting inside that window gives a false "allowed".
-SAFE='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"t","image":"busybox:1.36","command":["sh","-c","sleep 10; nc -z -w 3 $TARGET"],"env":[{"name":"TARGET","value":"__T__"}],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}},"resources":{"limits":{"cpu":"50m","memory":"32Mi"}}}]}}'
-nettest() { # $1=namespace $2="host port"
-  kubectl -n "$1" delete pod nettest --ignore-not-found >/dev/null 2>&1
-  kubectl -n "$1" run nettest --image=busybox:1.36 --restart=Never --overrides="${SAFE/__T__/$2}" >/dev/null 2>&1 || return 1
-  kubectl -n "$1" wait --for=jsonpath='{.status.phase}'=Succeeded pod/nettest --timeout=45s >/dev/null 2>&1; rc=$?
-  kubectl -n "$1" delete pod nettest --ignore-not-found >/dev/null 2>&1; return $rc
-}
-blocked "random pod in $NS cannot reach Postgres"  "nettest $NS 'postgres.data.svc.cluster.local 5432'"
-blocked "random pod in $NS cannot reach Ollama"    "nettest $NS 'ollama.ai.svc.cluster.local 11434'"
-blocked "random pod in $NS cannot reach the internet" "nettest $NS 'example.com 443'"
-blocked "random pod in $NS cannot reach Prometheus" "nettest $NS 'prometheus.monitoring.svc.cluster.local 9090'"
+# One probe pod tests every target (four pods would also exceed dev/qa's 5-pod quota). It waits
+# 10 s first: k3s's policy engine (kube-router) applies egress rules a few seconds after a pod
+# starts, and connecting inside that window gives a false "allowed". It prints one line per
+# target: "<host> <port> open|closed".
+TARGETS="postgres.data.svc.cluster.local:5432 ollama.ai.svc.cluster.local:11434 example.com:443 prometheus.monitoring.svc.cluster.local:9090"
+PROBE='sleep 10; for t in $TARGETS; do h=${t%:*}; p=${t##*:}; if nc -z -w 3 $h $p; then echo "$h $p open"; else echo "$h $p closed"; fi; done'
+SAFE=$(python3 -c 'import json,sys; print(json.dumps({"spec":{"securityContext":{"runAsNonRoot":True,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"t","image":"busybox:1.36","command":["sh","-c",sys.argv[1]],"env":[{"name":"TARGETS","value":sys.argv[2]}],"securityContext":{"allowPrivilegeEscalation":False,"capabilities":{"drop":["ALL"]}},"resources":{"limits":{"cpu":"50m","memory":"32Mi"}}}]}}))' "$PROBE" "$TARGETS")
+kubectl -n "$NS" delete pod nettest --ignore-not-found >/dev/null 2>&1
+PROBES=""
+if kubectl -n "$NS" run nettest --image=busybox:1.36 --restart=Never --overrides="$SAFE" >/dev/null 2>&1 \
+   && kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded pod/nettest --timeout=60s >/dev/null 2>&1; then
+  PROBES=$(kubectl -n "$NS" logs nettest 2>/dev/null)
+fi
+kubectl -n "$NS" delete pod nettest --ignore-not-found >/dev/null 2>&1
+# "blocked" only if the probe ran and reported the target closed; no result counts as a failure.
+closed() { grep -q "^$1 closed$" <<<"$PROBES"; }
+check "random pod in $NS cannot reach Postgres"       "closed 'postgres.data.svc.cluster.local 5432'"
+check "random pod in $NS cannot reach Ollama"         "closed 'ollama.ai.svc.cluster.local 11434'"
+check "random pod in $NS cannot reach the internet"   "closed 'example.com 443'"
+check "random pod in $NS cannot reach Prometheus"     "closed 'prometheus.monitoring.svc.cluster.local 9090'"
 
 echo "== RBAC / service accounts =="
 check "chat-api has no API token mounted" \
