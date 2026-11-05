@@ -62,11 +62,12 @@ metadata:
   namespace: data
 spec:
   hard:
-    requests.cpu: 250m
-    requests.memory: 384Mi
-    limits.cpu: '1'
-    limits.memory: 1Gi
-    pods: '2'
+    # Postgres (768Mi) + nightly backup job (256Mi) + weekly restore test (384Mi), all at once.
+    requests.cpu: 400m
+    requests.memory: 640Mi
+    limits.cpu: '2'
+    limits.memory: 1536Mi
+    pods: '3'
 ---
 apiVersion: v1
 kind: ResourceQuota

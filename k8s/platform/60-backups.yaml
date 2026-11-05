@@ -1,0 +1,203 @@
+# Nightly Postgres backups, kept on the server for 14 days, plus a weekly restore test.
+# Managed with scripts/10-backups.sh (make backups / backup-now / backup-status / backup-test / ...).
+# Off-server copy: not set up yet. The server has one disk, so these backups protect against
+# mistakes and a damaged database, but not against losing the disk.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: postgres-backup, namespace: data }
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: postgres-backups, namespace: data }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: { requests: { storage: 2Gi } }   # each night is well under 1 MB today
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: postgres-backup-scripts, namespace: data }
+data:
+  backup.sh: |
+    #!/bin/sh
+    # One pg_dump per environment database, plus roles. Written to a hidden folder first and renamed
+    # when complete, so a half-written backup never looks like a good one.
+    set -eu
+    umask 077
+    # k3s applies network rules a few seconds after a pod starts: wait until Postgres is reachable.
+    i=0; until pg_isready -q; do i=$((i + 1)); [ "$i" -lt 30 ] || { echo "Postgres not reachable"; exit 1; }; sleep 2; done
+    stamp=$(date -u +%Y-%m-%dT%H%MZ)
+    rm -rf /backups/.partial-*
+    work="/backups/.partial-$stamp"
+    mkdir -p "$work"
+    pg_dumpall --globals-only --file="$work/roles.sql"
+    for db in chat_dev chat_qa chat_prod; do
+      pg_dump --format=custom --compress=9 --dbname="$db" --file="$work/$db.dump"
+      pg_restore --list "$work/$db.dump" >/dev/null      # the archive must be readable
+    done
+    (cd "$work" && sha256sum roles.sql ./*.dump > SHA256SUMS)
+    mv "$work" "/backups/$stamp"
+    echo "$stamp" > /backups/LATEST.tmp && mv /backups/LATEST.tmp /backups/LATEST
+    # Prune only after a good backup, so a run of failures never deletes the last good copies.
+    find /backups -mindepth 1 -maxdepth 1 -type d -name '20*' -mtime +"$((KEEP_DAYS - 1))" -exec rm -rf {} +
+    echo "backup $stamp done:"; ls -l "/backups/$stamp"
+    echo "backups kept:"; ls /backups | grep '^20'
+
+  restore-test.sh: |
+    #!/bin/sh
+    # Restore the newest backup into a throwaway Postgres inside this pod and check it.
+    # Never touches the live database: no credentials, no network, a private socket only.
+    set -eu
+    stamp=$(cat /backups/LATEST)
+    dir="/backups/$stamp"
+    echo "== testing backup $stamp"
+    (cd "$dir" && sha256sum -c SHA256SUMS)
+    export PGDATA=/scratch/pgdata PGHOST=/scratch PGUSER=postgres
+    initdb --username=postgres --auth=trust --no-sync --no-locale >/dev/null
+    pg_ctl -w -l /scratch/postgres.log -o "-c listen_addresses='' -k /scratch -c shared_buffers=16MB -c fsync=off" start >/dev/null
+    # roles.sql also tries to create "postgres", which exists already: that one error is expected.
+    psql -q -v ON_ERROR_STOP=0 -f "$dir/roles.sql" >/dev/null 2>&1 || true
+    fail=0
+    for db in chat_dev chat_qa chat_prod; do
+      createdb "$db"
+      pg_restore --exit-on-error --dbname="$db" "$dir/$db.dump"
+      tables=$(psql -tAd "$db" -c "select count(*) from pg_tables where schemaname='public' and tablename in ('users','chats')")
+      triggers=$(psql -tAd "$db" -c "select count(*) from pg_trigger where not tgisinternal")
+      rows=$(psql -tAd "$db" -c "select 'users=' || (select count(*) from users) || ' chats=' || (select count(*) from chats)")
+      if [ "$tables" = 2 ] && [ "$triggers" -gt 0 ]; then
+        echo "PASS  $db restored: tables users+chats, $triggers retention triggers, $rows"
+      else
+        echo "FAIL  $db: tables=$tables triggers=$triggers"; fail=1
+      fi
+    done
+    pg_ctl -m fast stop >/dev/null
+    [ "$fail" = 0 ] && echo "restore test passed for $stamp"
+    exit "$fail"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: postgres-backup, namespace: data }
+spec:
+  schedule: "30 2 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels: { app.kubernetes.io/name: postgres-backup }
+        spec:
+          serviceAccountName: postgres-backup
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70          # "postgres" user in the alpine image
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile: { type: RuntimeDefault }
+            appArmorProfile: { type: Localhost, localhostProfile: k8s-chatbot }
+          containers:
+            - name: backup
+              image: postgres:16-alpine     # same major version as the server
+              command: ["/bin/sh", "/scripts/backup.sh"]
+              env:
+                - { name: PGHOST, value: postgres.data.svc.cluster.local }
+                - { name: PGUSER, value: postgres }
+                - { name: KEEP_DAYS, value: "14" }
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: postgres-secrets, key: POSTGRES_PASSWORD } }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { cpu: 500m, memory: 256Mi }
+              volumeMounts:
+                - { name: backups, mountPath: /backups }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - { name: backups, persistentVolumeClaim: { claimName: postgres-backups } }
+            - { name: scripts, configMap: { name: postgres-backup-scripts } }
+            - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: postgres-restore-test, namespace: data }
+spec:
+  schedule: "30 3 * * 0"           # Sundays, an hour after that night's backup
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels: { app.kubernetes.io/name: postgres-restore-test }   # not allowed to reach Postgres
+        spec:
+          serviceAccountName: postgres-backup
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile: { type: RuntimeDefault }
+            appArmorProfile: { type: Localhost, localhostProfile: k8s-chatbot }
+          containers:
+            - name: restore-test
+              image: postgres:16-alpine
+              command: ["/bin/sh", "/scripts/restore-test.sh"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 50m, memory: 128Mi }
+                limits: { cpu: 500m, memory: 384Mi }
+              volumeMounts:
+                - { name: backups, mountPath: /backups, readOnly: true }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+                - { name: scratch, mountPath: /scratch }
+                - { name: run, mountPath: /var/run/postgresql }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - { name: backups, persistentVolumeClaim: { claimName: postgres-backups } }
+            - { name: scripts, configMap: { name: postgres-backup-scripts } }
+            - { name: scratch, emptyDir: { sizeLimit: 512Mi } }
+            - { name: run, emptyDir: {} }
+            - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+---
+# Backup pods may reach Postgres; nothing else is added. (Policies add up: this sits beside postgres-allow.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: postgres-allow-backup, namespace: data }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: postgres } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: postgres-backup } } }]
+      ports: [{ port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: postgres-backup-egress, namespace: data }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: postgres-backup } }
+  policyTypes: [Egress]
+  egress:
+    - to: [{ podSelector: { matchLabels: { app.kubernetes.io/name: postgres } } }]
+      ports: [{ port: 5432 }]

@@ -203,6 +203,30 @@ kubectl -n chatbot-dev describe quota    # how full each environment is
 helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n chatbot-prod
 ```
 
+## Backups (Postgres)
+
+```bash
+make backups          # install/update: nightly backup 02:30 UTC, restore test Sundays 03:30 UTC
+make backup-now       # take one right away
+make backup-status    # what's on the server, last runs
+make backup-test      # restore the newest backup into a throwaway Postgres and check it
+make backup-download  # copy the newest backup to ./backups (git-ignored; STAMP=... for another)
+make db-restore ENV=dev STAMP=2026-11-05T1525Z   # replace one env's database (asks to confirm)
+```
+
+- **What:** one `pg_dump` per environment database (`chat_dev`, `chat_qa`, `chat_prod`) plus the roles, with a
+  SHA-256 checksum file. Kept **14 days** on the `postgres-backups` volume in the `data` namespace. Each backup
+  is written to a hidden folder and renamed only when complete; old ones are pruned only after a good backup.
+- **Restore test:** every Sunday a job restores the newest backup into a private Postgres inside its own pod
+  (no network, no credentials) and checks each database's tables, retention triggers and row counts.
+- **Restoring for real:** `make db-restore` first takes a fresh safety backup, stops that environment's chat-api,
+  restores in one transaction, then starts chat-api again. For prod you type `prod` to confirm.
+- **Limit:** the server has one disk, so these backups cover mistakes and a damaged database, not a dead disk.
+  An off-server copy (cloud bucket or another machine) is the next step. `make backup-download` is the manual
+  way until then.
+- The job runs with the same restrictions as every pod (non-root, read-only filesystem, AppArmor) and may reach
+  only Postgres. The backup files hold chat data and password hashes; keep downloaded copies private.
+
 ## Resource budget (16 GB / 4-core host)
 
 CPU is the tight resource here, not memory: the model generates on CPU, so Ollama may use 3 of the
@@ -245,8 +269,8 @@ To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` 
   - Every query from AWS crosses the internet (~20–60 ms). Fine for chat, which does a few queries per message.
   - If the home server is down, AWS pods can't reach data and fail their readiness check. That's accepted: the
     model and the rest of the platform live at home too.
-  - **Backups** are now our job (RDS did them before): a nightly `pg_dump` per environment, with a copy kept off
-    the server. To do before real users arrive.
+  - **Backups** are now our job (RDS did them before): nightly on the server since 2026-11-05 (see *Backups* below).
+    Still open: a copy kept off the server.
 - **AWS cost rule (applies to Phases 5–9):** AWS is used only when the home server needs extra capacity,
   and is provisioned with Terraform. When that capacity is no longer needed, **every AWS resource is destroyed**.
   Nothing in AWS holds data, so a single Terraform stack is enough and `terraform destroy` is always safe.

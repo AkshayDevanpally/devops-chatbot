@@ -8,6 +8,7 @@ Problems hit on 4–5 November 2026:
 - Issue 15: build #7 stopped by a vulnerability published overnight in the chat-api base image.
 - Issues 16–18: builds #8, #10 and #11 (5 November): a failed GitHub fetch, and the new Architecture page's
   check failing in dev, plus the mistakes made while fixing it. Build #12 then shipped to prod.
+- Issue 19: setting up nightly Postgres backups (on the server, 14 days, weekly restore test).
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -29,6 +30,7 @@ Problems hit on 4–5 November 2026:
 | 16 | Build #8 failed before any stage: Jenkins couldn't reach GitHub | Network | Passed on rerun (cause not confirmed) |
 | 17 | Builds #10 and #11 failed "Architecture page served" in dev and rolled back | Testing / deploy | Fixed |
 | 18 | Mistakes: a known issue repeated, a wrong first diagnosis, two deploys to dev at once | Process | Fixed |
+| 19 | First backup job: "Connection refused" from Postgres | Backups / network | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -399,3 +401,26 @@ Before deploying by hand, check that no pipeline build is running:
 **Lesson:** read the existing issues log before adding a check. When a local test clears a suspect, ask whether
 it reproduced the real conditions (TLS, chunked transfer, timing) before moving on.
 
+### Issue 19 — First backup job: "Connection refused" from Postgres
+
+**Symptom:** the first `make backup-now` failed three times in a row within seconds:
+
+```text
+pg_dumpall: error: connection to server at "postgres.data.svc.cluster.local" (10.43.203.19), port 5432 failed: Connection refused
+!! job backup-manual-20261105152401 did not complete (FailureTarget Failed)
+```
+
+**Cause:** the known k3s gap from the README's security notes: network rules for a brand-new pod are applied a
+few seconds after it starts. Until then the new backup pod's traffic is refused. The job connected immediately,
+and each retry was again a new pod, so all three attempts fell into that window. The rules themselves were
+right (`postgres-allow-backup`, `postgres-backup-egress`).
+
+**Fix:** the backup script (and the restore job) first waits up to 60 s for `pg_isready`, then starts. The next
+run made a complete backup in 8 s; the restore test then passed for all three databases.
+
+**Also found while setting up:** YAML anchors (`&podsec` / `*podsec`) don't work across the `---` documents of
+one file; `kubectl apply --dry-run=server` caught it before anything was applied. The settings are written out
+in full in each job.
+
+**Lesson:** any short-lived pod that talks over the network right at start-up (jobs, probes) must wait for its
+target first. The verify script's probe pod already did, for the same reason.

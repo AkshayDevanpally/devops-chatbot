@@ -8,7 +8,8 @@ kubectl apply -f k8s/platform/10-quotas.yaml -f k8s/platform/20-default-deny.yam
 
 ./scripts/05-secrets.sh
 
-kubectl apply -f k8s/platform/30-ollama.yaml -f k8s/platform/40-postgres.yaml -f k8s/platform/50-prometheus.yaml
+kubectl apply -f k8s/platform/30-ollama.yaml -f k8s/platform/40-postgres.yaml -f k8s/platform/50-prometheus.yaml \
+  -f k8s/platform/60-backups.yaml
 # Config changes aren't picked up live; restart so a re-run always applies the latest scrape config.
 kubectl -n monitoring rollout restart deployment/prometheus >/dev/null
 echo "==> waiting for Postgres"

@@ -209,7 +209,7 @@
       <text x="632" y="666" class="m">chat_dev</text>
       <text x="632" y="684" class="m">chat_qa</text>
       <text x="632" y="702" class="m">chat_prod</text>
-      <text x="632" y="720" class="s">1 login role per DB</text>
+      <text x="632" y="720" class="s">nightly backup, 14 days</text>
       <text x="446" y="760" class="s pl">Planned: AWS burst pods reach it via WireGuard</text>
 
       <rect class="ns-shared" x="800" y="610" width="340" height="170" rx="6"/>
@@ -660,6 +660,7 @@
     <div class="info"><h3>Data and app <span class="tag">chat-api</span></h3><ul>
       <li>One database and one login per environment</li>
       <li>Limits enforced by DB triggers</li>
+      <li>Nightly backups, restore-tested weekly</li>
       <li>Rate limits, CSP, input validation</li>
       <li>Logs don't contain message text</li></ul></div>
   </div>
@@ -758,7 +759,7 @@
       <text x="296" y="124" class="b">WireGuard</text>
       <text x="296" y="144" class="s">dials out to AWS</text>
       <text x="296" y="162" class="s">no port forward needed</text>
-      <text x="40" y="226" class="s">Data never leaves home. Backups: nightly pg_dump (to do).</text>
+      <text x="40" y="226" class="s">Data never leaves home. Backed up nightly, kept 14 days.</text>
 
       <rect class="ns-plan" x="610" y="20" width="470" height="230" rx="10"/>
       <text x="630" y="46" class="lab">AWS · TERRAFORM · DESTROYED WHEN IDLE</text>

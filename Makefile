@@ -1,4 +1,4 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
@@ -51,6 +51,24 @@ deploy-qa:     ## promote the same tag to qa
 
 deploy-prod:   ## promote the same tag to prod (asks for confirmation)
 	./scripts/06-deploy.sh prod
+
+backups:       ## nightly Postgres backups + weekly restore test (install/update)
+	./scripts/10-backups.sh install
+
+backup-now:    ## take a Postgres backup right away
+	./scripts/10-backups.sh now
+
+backup-status: ## list backups on the server and recent runs
+	./scripts/10-backups.sh status
+
+backup-test:   ## restore the newest backup into a throwaway Postgres and check it
+	./scripts/10-backups.sh test
+
+backup-download: ## copy the newest backup to ./backups (STAMP=... for another one)
+	./scripts/10-backups.sh download
+
+db-restore:    ## replace one env's database with a backup (ENV=dev|qa|prod STAMP=...)
+	./scripts/10-backups.sh restore $(ENV) $(STAMP)
 
 verify:        ## functional + security checks (ENV=dev|qa|prod)
 	./scripts/07-verify.sh $(or $(ENV),dev)
