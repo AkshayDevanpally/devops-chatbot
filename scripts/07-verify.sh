@@ -14,6 +14,15 @@ curl() { command curl --cacert "$CA" --resolve "$HOST:443:127.0.0.1" --resolve "
 check() { if eval "$2" >/dev/null 2>&1; then echo "PASS  $1"; ((pass++)); else echo "FAIL  $1"; ((fail++)); fi; }
 blocked() { if eval "$2" >/dev/null 2>&1; then echo "FAIL  $1 (was allowed)"; ((fail++)); else echo "PASS  $1"; ((pass++)); fi; }
 
+echo "== waiting for the previous release's pods to finish shutting down (up to 60 s) =="
+# Until they are gone, Traefik may still send some requests to them, and an old ui answers a new
+# page's path with its fallback index.html. That made a brand-new page's check fail at random.
+for _ in $(seq 1 30); do
+  kubectl -n "$NS" get pods -o jsonpath='{range .items[*]}{.metadata.deletionTimestamp}{"\n"}{end}' 2>/dev/null \
+    | grep -q . || break
+  sleep 2
+done
+
 echo "== waiting for $HOST to answer steadily (up to 60 s) =="
 # Right after a rollout, the newest pods may not be reachable yet (policy-engine delay). Wait for
 # five good answers in a row before testing, so checks measure the app and not the rollout.
@@ -37,7 +46,7 @@ blocked "metrics not exposed publicly"     "curl -sf $URL/api/metrics"
 check "security headers on UI"        "curl -sI $URL/ | grep -qi content-security-policy"
 check "bad theme colour rejected"     "test \$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{\"color\":\"<script>\"}' $URL/api/theme) = 422"
 check "Pulse page served"             "curl -sf $URL/pulse/ | grep -q '<title>Pulse'"
-check "Architecture page served"      "curl -sf $URL/architecture/ | grep -q '<title>Architecture'"
+check "Architecture page served"      "curl -sf $URL/architecture/ | grep '<title>Architecture' >/dev/null"
 check "Pulse has live Prometheus data" "curl -sf $URL/api/pulse | grep -q '\"available\":true'"
 check "Capacity page has live data"   "curl -sf $URL/api/capacity | grep -q '\"available\":true'"
 # grep without -q reads the whole body: with pipefail, -q quitting early would make curl fail (SIGPIPE)
