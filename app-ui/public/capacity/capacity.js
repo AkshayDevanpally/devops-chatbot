@@ -232,7 +232,7 @@ function awsRunning(body, tiles, series, d, chartTitle) {
 }
 
 function renderAws(A, d) {
-  const burst = $("aws-burst"), rds = $("aws-rds");
+  const burst = $("aws-burst");
   if (A.burst.running) {
     awsState(burst.querySelector("[data-state]"), true, `● ${A.burst.nodes} node${A.burst.nodes === 1 ? "" : "s"}`);
     awsRunning(burst.querySelector(".aws-body"), [
@@ -246,21 +246,7 @@ function renderAws(A, d) {
       "Created with Terraform when prod needs more than the home server's API pods, and destroyed again when load drops.",
     ]);
   }
-  if (A.rds.running) {
-    awsState(rds.querySelector("[data-state]"), true, "● Running");
-    const cpu = none(A.rds.cpu_percent) ? null : A.rds.cpu_percent / 100;
-    awsRunning(rds.querySelector(".aws-body"), [
-      { label: "CPU", value: fmt.pct(cpu), ratio: cpu, status: threshold(0.7, 0.9)(cpu) },
-      { label: "Connections", value: fmt.int(A.rds.connections) },
-      { label: "Free storage", value: fmt.gib(A.rds.free_storage_bytes) },
-    ], A.rds.series, d, "Database CPU, last hour");
-  } else {
-    awsState(rds.querySelector("[data-state]"), false, "○ Not provisioned");
-    awsEmpty(rds.querySelector(".aws-body"), "🗄️", "Not set up yet", [
-      "Arrives in Phase 5 for prod's data. It's the one AWS resource that stays on when everything else is torn down.",
-    ]);
-  }
-  const anything = A.burst.running || A.rds.running;
+  const anything = A.burst.running;
   const chip = $("aws-state");
   chip.className = `chip ${anything ? "on" : ""}`;
   chip.textContent = anything ? "● In use" : "○ Nothing running · $0/h";

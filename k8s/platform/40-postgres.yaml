@@ -1,4 +1,5 @@
-# Local Postgres for all three environments (prod moves to AWS RDS in Phase 5).
+# Local Postgres for all three environments. It stays here for good: AWS burst nodes (Phase 6)
+# reach it through the WireGuard tunnel (Phase 5), never a copy in AWS.
 # Secret `postgres-secrets` is created by scripts/05-secrets.sh, never committed.
 apiVersion: v1
 kind: ServiceAccount

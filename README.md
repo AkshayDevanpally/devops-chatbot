@@ -176,12 +176,12 @@ How it's wired, and why it's safe to show publicly:
 **Capacity** splits the screen in two, refreshed every 10 s:
 - 🏠 **Local hardware**: host CPU and memory (with OK / High / Critical), pods, prod API pods against the
   local ceiling where AWS burst starts, a one-hour CPU/memory chart, and memory per namespace.
-- ☁️ **AWS**: burst compute (Phase 6) and the RDS database (Phase 5). With nothing running it says
-  *Nothing running · $0/h*, which is the normal state under the AWS cost rule.
+- ☁️ **AWS**: burst compute (Phase 6). With nothing running it says *Nothing running · $0/h*, which is
+  the normal state under the AWS cost rule. The database is not in AWS; it appears on the local side (`data`).
 
 It uses the same safety model as Pulse: the browser calls `/api/capacity` (no parameters); chat-api runs fixed
 Prometheus queries. Local and AWS numbers are kept apart by one label: **anything scraped from AWS must carry
-`cloud="aws"`** (add it in the scrape config when Phases 5–6 bring AWS metrics in). Local queries exclude it.
+`cloud="aws"`** (add it in the scrape config when Phase 6 brings AWS metrics in). Local queries exclude it.
 
 **Error Journal** shows every incident written up in `docs/` as a self-scrolling journal: hover (or focus)
 to pause and scroll by hand, move away to resume; speed and status filters; reduced-motion users get no animation.
@@ -236,13 +236,21 @@ To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` 
 
 ## Notes / next phases
 
+- **Database stays at home (changed 2026-11-05, replaces the RDS plan):** there is no RDS. The one Postgres
+  in `k8s/platform/40-postgres.yaml` serves dev, qa and prod, and AWS burst pods use it too. The link:
+  - **WireGuard tunnel, dialled out from home.** The home server connects *to* the AWS burst node, so no router
+    port forward is needed and a changed home IP doesn't matter. Postgres is never exposed to the internet.
+  - Postgres accepts tunnel traffic only from the tunnel subnet, with TLS (certificate from the local CA,
+    `sslmode=verify-full`) and SCRAM passwords; the `postgres-allow` NetworkPolicy gets a rule for that subnet only.
+  - Every query from AWS crosses the internet (~20–60 ms). Fine for chat, which does a few queries per message.
+  - If the home server is down, AWS pods can't reach data and fail their readiness check. That's accepted: the
+    model and the rest of the platform live at home too.
+  - **Backups** are now our job (RDS did them before): a nightly `pg_dump` per environment, with a copy kept off
+    the server. To do before real users arrive.
 - **AWS cost rule (applies to Phases 5–9):** AWS is used only when the home server needs extra capacity,
-  and is provisioned with Terraform. When that capacity is no longer needed, **every AWS resource is destroyed
-  except the Postgres RDS database**, which stays to keep the data. Terraform is therefore split into two stacks:
-  - **persistent**: RDS plus the minimum it needs (VPC/subnets, DB subnet group, security group). Protected with
-    `deletion_protection`, `prevent_destroy`, automated backups and a final snapshot. No always-on extras
-    (no NAT gateway, load balancer or idle EC2).
-  - **burst**: everything else (compute, load balancers, networking for it). Safe to `terraform destroy` at any time.
+  and is provisioned with Terraform. When that capacity is no longer needed, **every AWS resource is destroyed**.
+  Nothing in AWS holds data, so a single Terraform stack is enough and `terraform destroy` is always safe.
+  Phase 5 is now the tunnel above (WireGuard config, Postgres TLS, the NetworkPolicy rule); Phase 6 the burst compute.
 
 - **Ollama version:** pinned to `ollama/ollama:0.30.10`. Check https://github.com/ollama/ollama/releases and bump it in `k8s/platform/30-ollama.yaml` and `.env`.
 - **TLS:** done in Phase 3.4 with a local CA. HSTS is 1 day (`tls.hstsSeconds`); raise it once certificates come from a public CA (e.g. Let's Encrypt in AWS).

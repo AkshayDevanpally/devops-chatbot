@@ -49,5 +49,5 @@ def test_nothing_in_aws_means_not_running():
     assert data["local"]["cpu_ratio"] == 0.4 and data["local"]["prod_burst_at"] == 3
     assert data["aws"]["burst"] == {"running": False, "nodes": 0, "cpu_ratio": None,
                                     "memory_ratio": None, "series": []}
-    assert data["aws"]["rds"]["running"] is False
+    assert set(data["aws"]) == {"burst"}            # no database in AWS: it stays at home
     json.dumps(data, allow_nan=False)

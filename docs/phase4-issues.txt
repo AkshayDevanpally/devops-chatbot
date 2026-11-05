@@ -192,4 +192,4 @@ OPEN ITEMS
 - Optional: image signing (cosign) with an admission check, after the SBOM step.
 - 16 GB resize (Ollama 4 Gi, Postgres 768 Mi): not applied, by choice. The files already hold the new
   sizes, so the next `make platform` run will apply them.
-- Next: Phase 5 (Postgres for prod moves to AWS RDS).
+- Next: Phase 5 (Postgres for prod moves to AWS RDS). [Changed 2026-11-05: no RDS; the database stays at home, see README.]

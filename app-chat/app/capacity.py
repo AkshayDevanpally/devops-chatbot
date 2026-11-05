@@ -4,9 +4,10 @@ Same safety model as Pulse: the browser sends no parameters and no PromQL; every
 below is fixed. The page shows the whole host, so queries cover every namespace.
 
 Local vs AWS is decided by one label: anything scraped from AWS carries cloud="aws"
-(added by the scrape config when AWS comes in, Phases 5-6). Local queries exclude it,
-so burst nodes never inflate the home server's numbers. With nothing running in AWS,
-the AWS half reports "not running", which is the normal, zero-cost state.
+(added by the scrape config when AWS burst compute comes in, Phase 6). Local queries exclude
+it, so burst nodes never inflate the home server's numbers. With nothing running in AWS,
+the AWS half reports "not running", which is the normal, zero-cost state. The database is
+never in AWS: it stays on the home server and shows up in the local half (namespace "data").
 """
 import asyncio
 import math
@@ -46,14 +47,9 @@ def build_queries(prod_burst_at: int) -> dict:
             "burst_nodes": f"count(machine_cpu_cores{{{AWS}}})",
             "burst_cpu_ratio": f"sum(rate(node_cpu_usage_seconds_total{{{AWS}}}[1m])) / sum(machine_cpu_cores{{{AWS}}})",
             "burst_memory_ratio": f"sum(node_memory_working_set_bytes{{{AWS}}}) / sum(machine_memory_bytes{{{AWS}}})",
-            # RDS (Phase 5), via a CloudWatch exporter (YACE metric names).
-            "rds_cpu_percent": f"max(aws_rds_cpuutilization_average{{{AWS}}})",
-            "rds_connections": f"sum(aws_rds_database_connections_average{{{AWS}}})",
-            "rds_free_storage_bytes": f"min(aws_rds_free_storage_space_average{{{AWS}}})",
         },
         "aws_series": {
             "burst_cpu": f"sum(rate(node_cpu_usage_seconds_total{{{AWS}}}[2m])) / sum(machine_cpu_cores{{{AWS}}})",
-            "rds_cpu": f"max(aws_rds_cpuutilization_average{{{AWS}}}) / 100",
         },
         "prod_burst_at": prod_burst_at,
     }
@@ -71,7 +67,7 @@ def namespace_rows(memory: list | None, cpu: list | None) -> list[dict]:
 
 
 def unavailable() -> dict:
-    return {"available": False, "local": {}, "aws": {"burst": {"running": False}, "rds": {"running": False}}}
+    return {"available": False, "local": {}, "aws": {"burst": {"running": False}}}
 
 
 class Capacity(Pulse):
@@ -102,7 +98,6 @@ class Capacity(Pulse):
         local["prod_burst_at"] = self.prod_burst_at
         aws = {k: first_value(raw[("aws", k)]) for k in q["aws"]}
         burst_running = bool(aws["burst_nodes"])
-        rds_running = aws["rds_cpu_percent"] is not None or aws["rds_connections"] is not None
 
         return {
             "available": any(r is not None for r in results),
@@ -119,13 +114,6 @@ class Capacity(Pulse):
                     "cpu_ratio": aws["burst_cpu_ratio"],
                     "memory_ratio": aws["burst_memory_ratio"],
                     "series": first_points(raw[("aws_series", "burst_cpu")]) if burst_running else [],
-                },
-                "rds": {
-                    "running": rds_running,
-                    "cpu_percent": aws["rds_cpu_percent"],
-                    "connections": aws["rds_connections"],
-                    "free_storage_bytes": aws["rds_free_storage_bytes"],
-                    "series": first_points(raw[("aws_series", "rds_cpu")]) if rds_running else [],
                 },
             },
         }
