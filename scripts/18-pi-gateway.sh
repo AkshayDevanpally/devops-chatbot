@@ -6,8 +6,11 @@
 #   ./scripts/18-pi-gateway.sh test        # checks from the server (no sudo)
 #   ./scripts/18-pi-gateway.sh simulate    # pretend the server sleeps: waking page + magic packet (sudo on Pi)
 #   ./scripts/18-pi-gateway.sh status
+#   ./scripts/18-pi-gateway.sh quiet MIN    # planned work (reboot, BIOS): no "server down" alert for MIN minutes
 #   ./scripts/18-pi-gateway.sh remove
 # Which Pi: PI=user@address (default rasppi@192.168.1.104). Give the Pi and the server fixed addresses.
+# The Pi also watches the server and sends urgent ntfy alerts when it's down without an announced sleep;
+# the server announces sleeps with a token kept in secret pi-gateway (namespace monitoring).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PI="${PI:-rasppi@192.168.1.104}"
@@ -30,14 +33,26 @@ install() {
   kubectl -n cert-manager get secret pi-gateway-tls -o jsonpath='{.data.tls\.crt}' | base64 -d > "$tmp/tls.crt"
   (umask 077; kubectl -n cert-manager get secret pi-gateway-tls -o jsonpath='{.data.tls\.key}' | base64 -d > "$tmp/tls.key")
   cp certs/chatbot-local-ca.crt "$tmp/ca.crt"
-  cat > "$tmp/gateway.env" <<ENV
+  # Token for the server's "going to sleep" notices (made once, kept in the cluster), and the ntfy topic.
+  if ! kubectl -n monitoring get secret pi-gateway >/dev/null 2>&1; then
+    kubectl -n monitoring create secret generic pi-gateway --from-literal=SLEEP_TOKEN="$(openssl rand -hex 24)" \
+      --from-literal=PI_URL="http://$PI_IP:8082" >/dev/null
+  fi
+  kubectl -n monitoring patch secret pi-gateway -p "{\"stringData\":{\"PI_URL\":\"http://$PI_IP:8082\"}}" >/dev/null
+  token=$(kubectl -n monitoring get secret pi-gateway -o jsonpath='{.data.SLEEP_TOKEN}' | base64 -d)
+  topic=$(kubectl -n monitoring get secret ntfy -o jsonpath='{.data.NTFY_TOPIC}' 2>/dev/null | base64 -d || true)
+  [[ -n $topic ]] || echo "    note: no ntfy topic yet (make alerts-topic): the Pi will log 'server down' but can't alert"
+  (umask 077; cat > "$tmp/gateway.env" <<ENV
 SERVER_IP=$SERVER_IP
 SERVER_MAC=$SERVER_MAC
 BROADCAST=${BROADCAST:-255.255.255.255}
 NAMES="$NAMES"
 IFACE=$pi_if
 CHECK_HOST=chatbot.local
+SLEEP_TOKEN=$token
+NTFY_TOPIC=$topic
 ENV
+  )
   echo "    server $SERVER_IP ($SERVER_MAC), broadcast $BROADCAST; Pi $PI_IP on $pi_if"
   echo "==> copying to $PI and setting it up (the Pi asks for its sudo password)"
   ssh -o BatchMode=yes "$PI" "rm -rf ~/$REMOTE && mkdir -m 700 ~/$REMOTE"
@@ -72,6 +87,12 @@ test_gw() {
     echo "$out" | grep -q "^svc $s active" && ok "$s running on the Pi" || bad "$s not running"
   done
   echo "$out" | grep -q '"ready"' && ok "waker sees the server as ready" || bad "waker status: $(echo "$out" | tail -1)"
+  # The watcher: reachable from the server, sees it up, refuses notices without the right token.
+  w=$(curl -sS -m 5 "http://$PI_IP:8082/watch" 2>&1 || true)
+  [[ $w == *'"server": "up"'* ]] && ok "watcher sees the server up" || bad "watcher: $w"
+  [[ $w == *'"alerts_to_phone": true'* ]] && ok "watcher can alert your phone (ntfy topic set)" || bad "watcher has no ntfy topic: make alerts-topic, then make pi-gateway"
+  [[ $(curl -sS -m 5 -o /dev/null -w '%{http_code}' -H 'X-Token: wrong' -d '{"until": 1}' "http://$PI_IP:8082/sleeping") == 401 ]] \
+    && ok "sleep notices need the token" || bad "sleep notice without token not refused"
   return $fail
 }
 
@@ -79,7 +100,12 @@ case "${1:-}" in
   install) install ;;
   test) test_gw ;;
   simulate) ssh -t "$PI" "sudo /opt/qwenops-gateway-setup/setup.sh simulate" ;;
-  status) ssh -o BatchMode=yes "$PI" "for s in nginx qwenops-waker qwenops-mdns avahi-daemon; do printf '%-16s %s\n' \$s \$(systemctl is-active \$s); done; curl -sS -m 5 http://127.0.0.1:8081/api/status; echo" ;;
+  quiet)
+    min=${2:?usage: $0 quiet MINUTES}; [[ $min =~ ^[0-9]+$ ]] || { echo "minutes must be a number"; exit 1; }
+    token=$(kubectl -n monitoring get secret pi-gateway -o jsonpath='{.data.SLEEP_TOKEN}' | base64 -d)
+    curl -fsS -m 5 -H "X-Token: $token" -d "{\"until\": $(( $(date +%s) + min * 60 )), \"reason\": \"maintenance\"}" \
+      "http://$PI_IP:8082/sleeping" >/dev/null && echo "The Pi won't send 'server down' alerts for $min minutes." ;;
+  status) curl -sS -m 5 "http://$PI_IP:8082/watch"; echo; ssh -o BatchMode=yes "$PI" "for s in nginx qwenops-waker qwenops-mdns avahi-daemon; do printf '%-16s %s\n' \$s \$(systemctl is-active \$s); done; curl -sS -m 5 http://127.0.0.1:8081/api/status; echo" ;;
   remove) ssh -t "$PI" "sudo /opt/qwenops-gateway-setup/setup.sh remove" ;;
   *) sed -n '2,11p' "$0"; exit 2 ;;
 esac

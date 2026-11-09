@@ -8,6 +8,7 @@
 #   ./scripts/17-sleep.sh allow-sleep
 #   sudo ./scripts/17-sleep.sh now [MIN] # sleep right away; with MIN, wake by itself after MIN minutes
 #   sudo ./scripts/17-sleep.sh wol-test  # find where Wake-on-LAN breaks (card, delivery, real wake)
+#   sudo ./scripts/17-sleep.sh alert-test # sleep 5 min WITHOUT telling the Pi: expect its "server down" alert
 #   sudo ./scripts/17-sleep.sh remove    # undo setup
 #
 # The server sleeps after IDLE_MINUTES with none of: app traffic (chats, Pulse, any /api call), a
@@ -21,6 +22,15 @@ STATE=/var/lib/qwenops-sleep
 CHECK=/usr/local/sbin/qwenops-idle-check
 IFACE=$(ip -4 route show default | awk '{print $5; exit}')
 need_root() { [[ $EUID -eq 0 ]] || { echo "run with sudo"; exit 1; }; }
+pi_announce() {   # $1 = wake time (unix), $2 = reason. Tells the Pi gateway: no "server down" alert meanwhile.
+  local k="kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n monitoring get secret pi-gateway -o jsonpath"
+  local tok url
+  tok=$($k='{.data.SLEEP_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  url=$($k='{.data.PI_URL}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  [[ -n $tok && -n $url ]] || return 0
+  curl -fsS -m 5 -H "X-Token: $tok" -d "{\"until\": $1, \"reason\": \"$2\"}" "$url/sleeping" >/dev/null \
+    && echo "Told the Pi gateway (no 'server down' alert until then)." || echo "Couldn't reach the Pi gateway."
+}
 
 write_check() {
   cat > "$CHECK" <<'SH'
@@ -85,6 +95,13 @@ if [[ -n $topic ]]; then
   curl -fsS -m 10 -H "Title: Server sleeping" -H "Priority: 2" -H "Tags: zzz" \
     -d "Idle for $IDLE_MINUTES minutes. It wakes itself at $(date -d "@$wake" '+%H:%M %Z') for backups; wake it any time with your Wake-on-LAN app." \
     "https://ntfy.sh/$topic" >/dev/null || true
+fi
+# Tell the Pi gateway, so it doesn't report a planned sleep as "server down".
+ptok=$(k -n monitoring get secret pi-gateway -o jsonpath='{.data.SLEEP_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || true)
+purl=$(k -n monitoring get secret pi-gateway -o jsonpath='{.data.PI_URL}' 2>/dev/null | base64 -d 2>/dev/null || true)
+if [[ -n $ptok && -n $purl ]]; then
+  curl -fsS -m 5 -H "X-Token: $ptok" -d "{\"until\": $wake, \"reason\": \"idle\"}" "$purl/sleeping" >/dev/null \
+    || logger -t qwenops-sleep "couldn't tell the Pi about the sleep"
 fi
 logger -t qwenops-sleep "idle $idle min: suspending, RTC wake at $(date -d "@$wake" '+%F %H:%M %Z')"
 rm -f "$STATE/idle-since"
@@ -201,6 +218,7 @@ case "${1:-}" in
     fi
     echo "Sleeping now; it wakes itself at $(date -d "@$wake" '+%a %H:%M:%S %Z'), or earlier by Wake-on-LAN."
     logger -t qwenops-sleep "manual sleep, RTC wake at $(date -d "@$wake" '+%F %H:%M:%S %Z')"
+    pi_announce "$wake" "make sleep-now"
     ethtool -s "$IFACE" wol g; rtcwake -m no -t "$wake" >/dev/null; sleep 2; systemctl suspend ;;
   wol-test)
     # A: card setting. B: does the Pi's packet reach this cable (awake)? C: does it wake us (asleep)?
@@ -222,6 +240,7 @@ case "${1:-}" in
     echo "== C. real wake: Pi sends at +45, +75, +105, +135 s; fallback timer 7 min"
     pi "nohup sh -c 'sleep 45; for i in 1 2 3 4; do curl -s -m 5 -X POST http://127.0.0.1:8081/api/wake; sleep 30; done' >/dev/null 2>&1 </dev/null &"
     ethtool -s "$IFACE" wol g
+    pi_announce "$(( $(date +%s) + 420 ))" "wol-test" | sed 's/^/   /'
     t0=$(date +%s); echo "   sleeping at $(TZ=${SLEEP_TZ:-Asia/Kolkata} date +%H:%M:%S) ..."
     rtcwake -m mem -s 420 >/dev/null 2>&1 || true      # blocks until we are awake again
     t1=$(date +%s); took=$((t1 - t0))
@@ -231,11 +250,21 @@ case "${1:-}" in
     if (( took < 400 )); then echo "   PASS  woken by Wake-on-LAN after $took s (the fallback was 420 s)"
     else echo "   FAIL  slept the full 7 minutes: the card didn't wake the PC (BIOS: Wake on LAN = LAN Only, Deep Sleep Control = Disabled)"; fi
     ;;
+  alert-test)
+    # Looks like a crash to the Pi: no sleep notice. Expect "Server is down (not asleep)" on the phone after
+    # ~3 min (the Pi checks every 30 s), then "Server is back" once this wakes by its timer after 5 min.
+    need_root
+    echo "Sleeping 5 minutes without telling the Pi. Watch your phone: 'Server is down' at ~3-4 min, then 'Server is back'."
+    logger -t qwenops-sleep "alert-test: 5 min sleep, Pi not told"
+    ethtool -s "$IFACE" wol g; sleep 2
+    t0=$(date +%s); rtcwake -m mem -s 300 >/dev/null 2>&1 || true; t1=$(date +%s)
+    echo "Awake again after $((t1 - t0)) s. The Pi should report 'Server is back' within a minute."
+    ;;
   remove)
     need_root
     systemctl disable --now qwenops-sleep.timer qwenops-wol.service >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/qwenops-sleep.{service,timer} /etc/systemd/system/qwenops-wol.service \
           /usr/lib/systemd/system-sleep/qwenops "$CHECK"
     systemctl daemon-reload; echo "Removed (settings kept in $CONF)." ;;
-  *) sed -n '2,14p' "$0"; exit 2 ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
 esac

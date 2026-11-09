@@ -30,7 +30,7 @@ install_all() {
   install -d -m 0755 "$ETC"
   install -m 0644 tls.crt "$ETC/tls.crt"; install -m 0644 ca.crt "$ETC/ca.crt"
   install -m 0640 -g www-data tls.key "$ETC/tls.key"
-  install -m 0644 gateway.env "$ETC/gateway.env"
+  install -m 0600 gateway.env "$ETC/gateway.env"     # holds the sleep-notice token and the ntfy topic
 
   echo "==> waker (magic packet + waking page)"
   install -d -m 0755 "$APP"
@@ -45,6 +45,7 @@ Wants=network-online.target
 EnvironmentFile=$ETC/gateway.env
 ExecStart=/usr/bin/python3 -I -u $APP/waker.py
 DynamicUser=yes
+StateDirectory=qwenops-waker      # remembers an announced sleep across restarts
 Restart=always
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -124,7 +125,7 @@ UNIT
   # Keep this script and the settings (not the key) for later "simulate" and "remove".
   install -d -m 0755 /opt/qwenops-gateway-setup
   install -m 0755 setup.sh /opt/qwenops-gateway-setup/setup.sh
-  install -m 0644 gateway.env /opt/qwenops-gateway-setup/gateway.env
+  install -m 0600 gateway.env /opt/qwenops-gateway-setup/gateway.env
 
   systemctl daemon-reload
   nginx -t

@@ -1,4 +1,4 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore backup-offsite-setup backup-offsite-now backup-admin-password db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset alerts alerts-topic alerts-test alerts-status lan-share-ca sleep-setup sleep-status sleep-now stay-awake allow-sleep wol-test pi-gateway pi-test pi-simulate pi-status
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore backup-offsite-setup backup-offsite-now backup-admin-password db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset alerts alerts-topic alerts-test alerts-status lan-share-ca sleep-setup sleep-status sleep-now stay-awake allow-sleep wol-test alert-test pi-gateway pi-test pi-simulate pi-status pi-quiet
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
@@ -151,6 +151,9 @@ sleep-now:     ## sudo: sleep right away; MINUTES=2 wakes it by itself after 2 m
 wol-test:      ## sudo: find where Wake-on-LAN breaks (card setting, Wi-Fi->cable delivery, real wake ~3 min)
 	sudo ./scripts/17-sleep.sh wol-test
 
+alert-test:    ## sudo: sleep 5 min without telling the Pi; your phone should get "server down", then "back"
+	sudo ./scripts/17-sleep.sh alert-test
+
 stay-awake:    ## never sleep until allow-sleep
 	./scripts/17-sleep.sh stay-awake
 
@@ -166,8 +169,11 @@ pi-test:       ## checks through the Pi: pass-through, names announced, waker se
 pi-simulate:   ## pretend the server sleeps: waking page, redirect, magic packet (Pi's sudo password)
 	./scripts/18-pi-gateway.sh simulate
 
-pi-status:     ## Pi services and what the waker sees
+pi-status:     ## Pi services, what the waker and the watcher see
 	./scripts/18-pi-gateway.sh status
+
+pi-quiet:      ## planned work (reboot, BIOS): no "server down" alert from the Pi for MINUTES (default 30)
+	./scripts/18-pi-gateway.sh quiet $(or $(MINUTES),30)
 
 verify:        ## functional + security checks (ENV=dev|qa|prod)
 	./scripts/07-verify.sh $(or $(ENV),dev)
