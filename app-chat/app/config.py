@@ -30,6 +30,12 @@ MAX_CHATS_PER_USER = 15   # enforced in the database too
 MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", "2000"))
 CONTEXT_EXCHANGES = int(os.getenv("CONTEXT_EXCHANGES", "4"))
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "10"))
+# Overload protection: replies this pod streams from the model at once, how many may wait in line,
+# and for how long. Beyond that, people get "busy, try again" at once instead of a 2-minute hang.
+# dev, qa and prod share one Ollama (2 replies at a time), so keep the totals close to that.
+CHAT_SLOTS = int(os.getenv("CHAT_SLOTS", "1"))
+CHAT_QUEUE = int(os.getenv("CHAT_QUEUE", "4"))
+CHAT_QUEUE_WAIT_SECONDS = float(os.getenv("CHAT_QUEUE_WAIT_SECONDS", "30"))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
 ALLOWED_THEMES = ["teal", "indigo", "rose", "amber", "emerald", "slate"]

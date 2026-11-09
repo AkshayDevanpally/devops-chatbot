@@ -3,6 +3,26 @@
 #   dev/qa: api 500m + ui 100m + surge 500m + 100m = 1.2 -> 1500m
 #   prod:   3 api x 1 + 2 ui x 100m (HPA at max) + surge 1 + 100m = 4.3 -> 5
 # CPU limits are ceilings, not reservations; scheduling uses requests.cpu.
+# Who goes first when the home server runs short (overload protection). Under memory pressure the
+# kubelet evicts lower-priority pods first (among those using more than they asked for), and a pod
+# that can't be scheduled may push lower-priority pods off the node.
+#   qwenops-platform  Postgres, Ollama, Prometheus: everything else depends on them
+#   qwenops-prod      prod chat-api and UI (helm values-prod.yaml)
+#   (default, 0)      dev, qa, Jenkins, backup jobs: give way first
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: qwenops-platform }
+value: 1000000
+globalDefault: false
+description: Shared platform pods (Postgres, Ollama, Prometheus). Evicted last.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: qwenops-prod }
+value: 100000
+globalDefault: false
+description: Prod chat-api and UI. Ahead of dev, qa and Jenkins.
+---
 # Phase 6 burst pods: only for the AWS node (nodeSelector + taint toleration), counted apart from
 # the home quotas. Never preempts anything.
 apiVersion: scheduling.k8s.io/v1

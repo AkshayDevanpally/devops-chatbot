@@ -32,6 +32,9 @@ spec:
     spec:
       serviceAccountName: chat-api
       automountServiceAccountToken: false
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       securityContext:
         {{- include "chatbot.podSecurityContext" . | nindent 8 }}
         runAsUser: 10001
@@ -59,6 +62,9 @@ spec:
             - { name: BACKUP_OPS_URL, value: {{ .Values.backupOpsUrl | quote }} }
             - { name: MODEL, value: {{ .Values.model | quote }} }
             - { name: COOKIE_SECURE, value: {{ .Values.cookieSecure | quote }} }
+            - { name: CHAT_SLOTS, value: {{ .Values.api.chat.slots | quote }} }
+            - { name: CHAT_QUEUE, value: {{ .Values.api.chat.queue | quote }} }
+            - { name: CHAT_QUEUE_WAIT_SECONDS, value: {{ .Values.api.chat.waitSeconds | quote }} }
           ports:
             - { name: http, containerPort: 8000 }
             - { name: metrics, containerPort: 9100 }   # not in the Service, not on the ingress

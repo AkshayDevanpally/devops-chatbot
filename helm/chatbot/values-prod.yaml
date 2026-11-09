@@ -2,8 +2,11 @@ env: prod
 host: chatbot.local
 theme: teal
 
+priorityClassName: qwenops-prod
+
 api:
   replicas: 2
+  chat: { slots: 1, queue: 4, waitSeconds: 30 }   # 2-3 pods: 2-3 replies at once, up to 12 in line
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { cpu: "1", memory: 320Mi }   # 4 pods during a rolling update must fit the 1536Mi quota

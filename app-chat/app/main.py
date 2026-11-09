@@ -1,5 +1,6 @@
 """Chat API: streams replies from a small Qwen model (via Ollama) and stores history
 for the first 50 users, keeping each user's newest 15 chats."""
+import asyncio
 import json
 import logging
 import time
@@ -36,6 +37,7 @@ CHAT_FIRST_TOKEN = Histogram("chat_first_token_seconds", "Time to first token",
                              buckets=(0.1, 0.25, 0.5, 1, 2, 3, 5, 8, 13, 20))
 CHAT_TOKENS = Counter("chat_tokens", "Tokens streamed from the model")
 CHAT_ACTIVE = Gauge("chat_active_streams", "Replies being streamed right now")
+CHAT_WAITING = Gauge("chat_waiting", "Chats waiting in line for a model slot")
 HTTP_REQUESTS = Counter("http_requests", "HTTP requests", ["route", "method", "status_class"])
 HTTP_LATENCY = Histogram("http_request_seconds", "Time until response headers", ["route"])
 
@@ -245,6 +247,51 @@ async def history(request: Request, response: Response):
     }
 
 
+# ---------- overload protection ----------
+class ModelGate:
+    """A few model slots per pod plus a short line. Full line: refuse at once (fail fast)."""
+
+    def __init__(self, slots: int, queue: int, wait: float):
+        self.slots, self.queue, self.wait = slots, queue, wait
+        self.active = 0
+        self.waiting = 0
+        self._free = asyncio.Condition()
+
+    def full(self) -> bool:
+        return self.active >= self.slots and self.waiting >= self.queue
+
+    def must_wait(self) -> bool:
+        return self.active >= self.slots
+
+    async def acquire(self) -> bool:
+        async with self._free:
+            if self.active < self.slots:
+                self.active += 1
+                return True
+            if self.waiting >= self.queue:
+                return False
+            self.waiting += 1
+            CHAT_WAITING.inc()
+            try:
+                await asyncio.wait_for(self._free.wait_for(lambda: self.active < self.slots), self.wait)
+                self.active += 1
+                return True
+            except TimeoutError:
+                return False
+            finally:
+                self.waiting -= 1
+                CHAT_WAITING.dec()
+
+    async def release(self) -> None:
+        async with self._free:
+            self.active -= 1
+            self._free.notify()
+
+
+gate = ModelGate(config.CHAT_SLOTS, config.CHAT_QUEUE, config.CHAT_QUEUE_WAIT_SECONDS)
+BUSY = "Busy right now: lots of people are chatting. Try again in a moment."
+
+
 # ---------- chat (Server-Sent Events) ----------
 @app.post("/api/chat")
 async def chat(body: ChatIn, request: Request, response: Response):
@@ -254,6 +301,10 @@ async def chat(body: ChatIn, request: Request, response: Response):
     ):
         CHAT_REQUESTS.labels("rate_limited").inc()
         raise HTTPException(429, "slow down")
+
+    if gate.full():   # the line is full: say so at once, before any work
+        CHAT_REQUESTS.labels("busy").inc()
+        raise HTTPException(503, BUSY, headers={"Retry-After": "15"})
 
     stored = await ensure_user(uid)
     messages = [{"role": "system", "content": "You are a concise, friendly assistant."}]
@@ -268,11 +319,19 @@ async def chat(body: ChatIn, request: Request, response: Response):
     messages.append({"role": "user", "content": body.message})
 
     async def stream():
+        # The slot is taken inside the stream, so it is always given back (finally), even when the
+        # browser goes away while waiting in line.
+        yield f"event: meta\ndata: {json.dumps({'stored': stored})}\n\n"
+        if gate.must_wait() and not gate.full():   # only promise a place in line if there is one
+            yield f"event: queued\ndata: {json.dumps({'ahead': gate.waiting + 1})}\n\n"
+        if not await gate.acquire():
+            CHAT_REQUESTS.labels("busy").inc()
+            yield f"event: error\ndata: {json.dumps({'error': BUSY, 'busy': True})}\n\n"
+            return
         started = time.monotonic()
         reply_parts: list[str] = []
         CHAT_ACTIVE.inc()
         try:
-            yield f"event: meta\ndata: {json.dumps({'stored': stored})}\n\n"
             try:
                 async with http.stream(
                     "POST", "/api/chat",
@@ -311,6 +370,7 @@ async def chat(body: ChatIn, request: Request, response: Response):
             yield "event: done\ndata: {}\n\n"
         finally:
             CHAT_ACTIVE.dec()   # also runs when the browser disconnects mid-reply
+            await gate.release()
 
     sse = StreamingResponse(stream(), media_type="text/event-stream",
                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

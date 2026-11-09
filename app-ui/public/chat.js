@@ -57,10 +57,13 @@ document.getElementById("composer").addEventListener("submit", async e => {
       body: JSON.stringify({ message: text }),
     });
     if (!res.ok) {
-      out.textContent = res.status === 429 ? "Slow down a little and try again." : "Something went wrong.";
+      const detail = res.status === 503 ? ((await res.json().catch(() => ({}))).detail || "") : "";
+      out.textContent = res.status === 429 ? "Slow down a little and try again."
+        : res.status === 503 ? (detail || "Busy right now. Try again in a moment.") : "Something went wrong.";
       return;
     }
     out.textContent = "";
+    let started = false;   // a "you're in line" note is replaced by the first word of the reply
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -76,7 +79,12 @@ document.getElementById("composer").addEventListener("submit", async e => {
         const data = (frame.match(/^data: (.*)$/m) || [])[1];
         if (!data) continue;
         const d = JSON.parse(data);
-        if (ev === "message" && d.token) { out.textContent += d.token; window.scrollTo(0, document.body.scrollHeight); }
+        if (ev === "queued") out.textContent = `Busy right now, you're in line (${d.ahead} ahead)…`;
+        if (ev === "message" && d.token) {
+          if (!started) { out.textContent = ""; started = true; }
+          out.textContent += d.token;
+          window.scrollTo(0, document.body.scrollHeight);
+        }
         if (ev === "error") out.textContent = d.error;
         if (ev === "meta") {
           document.getElementById("guest").style.display = d.stored ? "none" : "block";

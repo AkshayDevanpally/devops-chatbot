@@ -61,6 +61,7 @@ spec:
     spec:
       serviceAccountName: postgres
       automountServiceAccountToken: false
+      priorityClassName: qwenops-platform   # evicted last (k8s/platform/10-quotas.yaml)
       securityContext:
         runAsNonRoot: true
         runAsUser: 70          # "postgres" user in the alpine image

@@ -22,6 +22,9 @@ existingSecret: chat-api-secrets
 
 api:
   replicas: 1
+  # Overload protection, per pod: replies streamed at once, how many may wait in line, and how long.
+  # All environments share one Ollama (2 replies at a time), so dev and qa get a short line.
+  chat: { slots: 1, queue: 2, waitSeconds: 30 }
   resources:
     requests: { cpu: 50m, memory: 96Mi }
     limits: { cpu: 500m, memory: 256Mi }
@@ -39,6 +42,10 @@ ui:
 
 pdb:
   enabled: false
+
+# Prod uses qwenops-prod (k8s/platform/10-quotas.yaml): under memory pressure dev, qa and Jenkins are
+# evicted first, and a new prod pod may push them off a full node. "" = default priority.
+priorityClassName: ""
 
 # Phase 6 burst: extra chat-api pods on the AWS node (prod only). Never set by hand in values files:
 # scripts/06-deploy.sh turns it on while a burst node is Ready, scripts/13-burst.sh on bring-up.

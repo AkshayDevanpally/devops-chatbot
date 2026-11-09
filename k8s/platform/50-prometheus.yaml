@@ -188,6 +188,15 @@ data:
             annotations:
               summary: "Prod is at its home limit (3/3 API pods) and the first word takes over 15 s"
               description: "Add AWS capacity: make burst-up (about 0.05-0.08 USD an hour; it stops itself when idle)."
+          - alert: ChatsTurnedAway
+            expr: |
+              sum(rate(chat_requests_total{namespace="chatbot-prod",outcome="busy"}[5m]))
+                / sum(rate(chat_requests_total{namespace="chatbot-prod",outcome!="rate_limited"}[5m])) > 0.1
+            for: 5m
+            labels: { severity: warning }
+            annotations:
+              summary: "{{ $value | humanizePercentage }} of prod chats get 'busy, try again'"
+              description: "The model is full and the line is full. Add capacity: make burst-up."
           - alert: ModelSaturated
             expr: sum(chat_active_streams{namespace="chatbot-prod"}) > 2
             for: 5m
@@ -246,6 +255,7 @@ spec:
       labels: { app.kubernetes.io/name: prometheus }
     spec:
       serviceAccountName: prometheus
+      priorityClassName: qwenops-platform   # evicted last (k8s/platform/10-quotas.yaml)
       automountServiceAccountToken: true   # needed for discovery + kubelet; RBAC above is read-only
       securityContext:
         runAsNonRoot: true

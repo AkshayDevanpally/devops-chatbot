@@ -68,6 +68,9 @@ spec:
             - { name: BACKUP_OPS_URL, value: {{ .Values.backupOpsUrl | quote }} }
             - { name: MODEL, value: {{ .Values.model | quote }} }
             - { name: COOKIE_SECURE, value: {{ .Values.cookieSecure | quote }} }
+            - { name: CHAT_SLOTS, value: {{ .Values.api.chat.slots | quote }} }
+            - { name: CHAT_QUEUE, value: {{ .Values.api.chat.queue | quote }} }
+            - { name: CHAT_QUEUE_WAIT_SECONDS, value: {{ .Values.api.chat.waitSeconds | quote }} }
             - { name: PGSSLMODE, value: verify-full }
             - { name: PGSSLROOTCERT, value: /etc/postgres-ca/ca.crt }
           ports:

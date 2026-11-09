@@ -35,6 +35,9 @@ spec:
     spec:
       serviceAccountName: ui
       automountServiceAccountToken: false
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       securityContext:
         {{- include "chatbot.podSecurityContext" . | nindent 8 }}
         runAsUser: 101
