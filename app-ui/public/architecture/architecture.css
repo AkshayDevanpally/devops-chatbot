@@ -9,6 +9,8 @@
   --ci: #E6AB4D; --ci-bg: #33260E;
   --deny: #F2776D; --deny-bg: #3B1714;
   --plan: #C391EC; --plan-bg: #2A1A38;
+  --edge: #E98FBF; --edge-bg: #36172A;   /* Raspberry Pi gateway */
+  --aws: #5FB4E6; --aws-bg: #0F2636;     /* AWS, created on demand */
   --f-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   color: var(--fg); font-size: 15px; line-height: 1.6; padding-bottom: 64px;
 }
@@ -51,6 +53,8 @@
 .lg-shared { background: var(--shared-bg); border-color: var(--shared) !important; }
 .lg-sys { background: var(--sys-bg); border-color: var(--sys) !important; }
 .lg-ci { background: var(--ci-bg); border-color: var(--ci) !important; }
+.lg-edge { background: var(--edge-bg); border-color: var(--edge) !important; }
+.lg-aws { background: var(--aws-bg); border-color: var(--aws) !important; }
 .lg-plan { background: var(--plan-bg); border-color: var(--plan) !important; border-style: dashed !important; }
 
 /* SVG styling, driven by the tokens above */
@@ -72,17 +76,31 @@
 .ns-ci { fill: var(--ci-bg); stroke: var(--ci); stroke-width: 1.3; }
 .ns-deny { fill: var(--deny-bg); stroke: var(--deny); stroke-width: 1.3; }
 .ns-plan { fill: var(--plan-bg); stroke: var(--plan); stroke-width: 1.5; stroke-dasharray: 7 5; }
+.ns-edge { fill: var(--edge-bg); stroke: var(--edge); stroke-width: 1.3; }
+.ns-aws { fill: var(--aws-bg); stroke: var(--aws); stroke-width: 1.5; stroke-dasharray: 9 4; }
+.g-lan { fill: none; stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 3 4; }
 .gate { fill: var(--ci-bg); stroke: var(--ci); stroke-width: 1.5; stroke-dasharray: 6 4; }
 .flow { fill: none; stroke: var(--fg); stroke-width: 1.5; }
 .flow.dash { stroke-dasharray: 5 4; }
 .flow-a { fill: none; stroke: var(--app); stroke-width: 1.8; }
 .flow-d { fill: none; stroke: var(--deny); stroke-width: 1.6; stroke-dasharray: 5 4; }
+.flow-e { fill: none; stroke: var(--edge); stroke-width: 1.8; }
+.flow-w { fill: none; stroke: var(--aws); stroke-width: 1.8; stroke-dasharray: 7 4; }
 .flow-p { fill: none; stroke: var(--plan); stroke-width: 1.8; stroke-dasharray: 7 5; }
 .net { fill: none; stroke-width: 4; stroke-linecap: round; }
 .net-front { stroke: var(--app); } .net-back { stroke: var(--shared); } .net-egress { stroke: var(--ci); }
 .dot-front { fill: var(--app); } .dot-back { fill: var(--shared); } .dot-egress { fill: var(--ci); }
 /* markers live in a separate hidden svg, so they take literal fills from the tokens' values */
+.mk-e { fill: #E98FBF; } .mk-w { fill: #5FB4E6; }
 .mk { fill: #e6edf3; } .mk-a { fill: #3FC4A9; } .mk-d { fill: #F2776D; } .mk-p { fill: #C391EC; }
+/* sequence diagram */
+.life { stroke: var(--line-strong); stroke-width: 1.2; stroke-dasharray: 4 5; }
+.phase-band { fill: var(--host-bg); stroke: var(--line); }
+.note { fill: var(--surface); stroke: var(--line-strong); stroke-dasharray: 3 3; }
+.arch svg .step { font-family: var(--f-mono); font-size: 10px; font-weight: 700; fill: var(--bg); }
+.step-dot { fill: var(--fg); }
+.arch svg .ed { fill: var(--edge); }
+.arch svg .aw { fill: var(--aws); }
 .x-mark { fill: var(--surface); stroke: var(--deny); stroke-width: 1.6; }
 .x-line { stroke: var(--deny); stroke-width: 2; }
 
@@ -107,6 +125,9 @@
 .phases li::before { content: ""; position: absolute; left: -7px; top: 12px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 2px solid var(--line-strong); }
 .phases li.done::before { background: var(--app); border-color: var(--app); }
 .phases li.next::before { border-color: var(--plan); border-style: dashed; }
+.steps { margin: 0; padding-left: 22px; display: grid; gap: 6px; font-size: 14px; max-width: 90ch; }
+.steps b { color: var(--fg); }
+.arch h3.sub { font-size: 15px; color: var(--mute); margin-top: 6px; }
 .phases b { font-family: var(--f-mono); font-size: 13px; margin-right: 6px; }
 .arch-foot { margin-top: 56px; color: var(--mute); font-size: 13px; border-top: 1px solid var(--line); padding-top: 14px; }
 @media (max-width: 600px) { .arch { font-size: 14px; } .lede { font-size: 15px; } }

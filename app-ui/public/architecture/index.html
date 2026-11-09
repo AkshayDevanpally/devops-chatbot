@@ -21,27 +21,36 @@
     <marker id="ah-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-a"/></marker>
     <marker id="ah-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-d"/></marker>
     <marker id="ah-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-p"/></marker>
+    <marker id="ah-e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-e"/></marker>
+    <marker id="ah-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-w"/></marker>
   </defs>
 </svg>
 <div class="arch-head">
-  <div class="eyebrow">QwenOps · last updated 5 Nov 2026</div>
+  <div class="eyebrow">QwenOps · last updated 9 Nov 2026</div>
   <h1>QwenOps Architecture</h1>
-  <p class="lede">Everything that runs on the home server today: the k3s cluster and its namespaces, Docker and the local registry, the Jenkins pipeline with Trivy, the network rules between every piece, and the planned link from AWS.</p>
+  <p class="lede">Everything that runs today: the Raspberry Pi gateway in front of the home server, the k3s cluster and every service in it, the addresses and ports each piece uses, how a request travels, how the server sleeps and wakes, the delivery pipeline with its live page, backups, phone alerts, and the AWS capacity that exists only when it's needed.</p>
   <div class="pills">
-    <span class="pill live">● Live: phases 1–4</span>
+    <span class="pill live">● Live: phases 1–8</span>
     <span class="pill">qwen2.5:0.5b on CPU</span>
     <span class="pill">16 GB · 4 cores</span>
-    <span class="pill plan">○ Planned: phases 5–9</span>
+    <span class="pill">AWS on demand · $10 cap</span>
+    <span class="pill plan">○ Planned: phase 9</span>
   </div>
   <nav class="toc" aria-label="Sections">
     <a href="#overview"><span>1</span>Overview map</a>
-    <a href="#request"><span>2</span>A request, end to end</a>
-    <a href="#network"><span>3</span>Network rules</a>
-    <a href="#pipeline"><span>4</span>CI/CD pipeline</a>
-    <a href="#security"><span>5</span>Security layers</a>
-    <a href="#compose"><span>6</span>Docker Compose mode</a>
-    <a href="#budget"><span>7</span>Resource budget</a>
-    <a href="#next"><span>8</span>Next: AWS burst</a>
+    <a href="#addresses"><span>2</span>Addresses and ports</a>
+    <a href="#request"><span>3</span>A chat, end to end</a>
+    <a href="#wake"><span>4</span>Sleep and wake</a>
+    <a href="#network"><span>5</span>Network rules</a>
+    <a href="#pipeline"><span>6</span>Delivery pipeline</a>
+    <a href="#live"><span>7</span>Live pipeline and Be a Dev</a>
+    <a href="#backups"><span>8</span>Backups</a>
+    <a href="#alerts"><span>9</span>Alerts</a>
+    <a href="#aws"><span>10</span>AWS on demand</a>
+    <a href="#security"><span>11</span>Security layers</a>
+    <a href="#budget"><span>12</span>Resources and overload</a>
+    <a href="#compose"><span>13</span>Docker Compose mode</a>
+    <a href="#phases"><span>14</span>Phases</a>
   </nav>
 </div>
 
@@ -49,397 +58,689 @@
 <section id="overview">
   <div class="sec-head">
     <h2>1 · Overview map</h2>
-    <p>One physical machine. Inside it, k3s runs the apps and the shared platform; outside k3s, Docker hosts the image registry and the Jenkins build agent runs as a systemd service.</p>
+    <p>Two machines at home and AWS only when needed. The Raspberry Pi is always on and answers for the site names; the home server runs everything else and sleeps when nobody uses it. Inside the server, k3s runs the apps and the shared platform; Docker, the build agent and the sleep and tunnel tools run on the host.</p>
   </div>
   <figure>
     <div class="sheet">
-    <svg viewBox="0 0 1200 1010" role="img" aria-label="The home server runs k3s with kube-system, ci and cert-manager namespaces on top, three app namespaces in the middle, and shared ai, data and monitoring namespaces below. Docker, the Jenkins agent and host hardening sit outside k3s. The browser reaches Traefik over HTTPS; Jenkins polls GitHub.">
-      <!-- external -->
-      <rect class="ext" x="60" y="20" width="340" height="80" rx="6"/>
-      <text x="76" y="44" class="b">Your laptop or phone</text>
-      <text x="76" y="64" class="s">Browser · hosts file points to 192.168.1.104</text>
-      <text x="76" y="82" class="s">Trusts certs/chatbot-local-ca.crt</text>
+    <svg viewBox="0 0 1200 1400" role="img" aria-label="A phone reaches the home router over Wi-Fi and the Raspberry Pi gateway at 192.168.1.104, which passes traffic through to Traefik on the home server at 192.168.1.101. The server runs k3s with the namespaces ci, cert-manager and kube-system at the top, the three app namespaces in the middle, and ai, data and monitoring below. Docker, the Jenkins agent and the host services sit outside k3s. AWS at the bottom holds the guardrails, the S3 backup bucket and the on-demand burst node, linked by WireGuard.">
+      <!-- row 0: outside the home -->
+      <rect class="ext" x="20" y="20" width="300" height="84" rx="6"/>
+      <text x="36" y="44" class="b">Phone or laptop</text>
+      <text x="36" y="64" class="s">finds *.chatbot.local by mDNS → 192.168.1.104</text>
+      <text x="36" y="82" class="s">trusts the home CA (make lan-share-ca)</text>
 
-      <rect class="ext" x="430" y="20" width="340" height="80" rx="6"/>
-      <text x="446" y="44" class="b">GitHub · private repo</text>
-      <text x="446" y="64" class="s">master branch · read-only deploy key</text>
-      <text x="446" y="82" class="s">Every push runs the pipeline</text>
+      <rect class="ext" x="360" y="20" width="820" height="84" rx="6"/>
+      <text x="376" y="40" class="lab">INTERNET · ALWAYS THROUGH THE ROUTER</text>
+      <rect class="node" x="376" y="50" width="190" height="46" rx="4"/>
+      <text x="388" y="69" class="b">GitHub</text>
+      <text x="388" y="87" class="s">Jenkins polls :22 every 2 min</text>
+      <rect class="node" x="578" y="50" width="190" height="46" rx="4"/>
+      <text x="590" y="69" class="b">ntfy.sh</text>
+      <text x="590" y="87" class="s">alerts to your phone · :443</text>
+      <rect class="node" x="780" y="50" width="190" height="46" rx="4"/>
+      <text x="792" y="69" class="b">Registries and mirrors</text>
+      <text x="792" y="87" class="s">model, images, packages · :443</text>
+      <rect class="node" x="982" y="50" width="190" height="46" rx="4"/>
+      <text x="994" y="69" class="b">AWS ap-south-1</text>
+      <text x="994" y="87" class="s">S3 · burst · budget (bottom)</text>
 
-      <rect class="ext" x="800" y="20" width="340" height="80" rx="6"/>
-      <text x="816" y="44" class="b">Public internet</text>
-      <text x="816" y="64" class="s">Ollama model registry · image and package mirrors</text>
-      <text x="816" y="82" class="s">Reached only by Ollama, Jenkins and host builds</text>
+      <!-- row 1: home network -->
+      <rect class="g-lan" x="20" y="130" width="1160" height="150" rx="10"/>
+      <text x="36" y="150" class="lab">HOME NETWORK · 192.168.1.0/24</text>
+      <rect class="node" x="36" y="162" width="270" height="102" rx="4"/>
+      <text x="50" y="184" class="b">Names on the network</text>
+      <text x="50" y="204" class="m">chatbot.local</text>
+      <text x="50" y="222" class="m">dev. · qa. · jenkins.chatbot.local</text>
+      <text x="50" y="242" class="s">all point to the Pi, 192.168.1.104</text>
 
-      <!-- host -->
-      <rect class="g-host" x="20" y="130" width="1160" height="870" rx="10"/>
-      <text x="40" y="155" class="lab">HOME SERVER</text>
-      <text x="1160" y="155" text-anchor="end" class="s">Ubuntu 26.10 · 192.168.1.104 wired / .105 Wi-Fi · 16 GB RAM · 4 cores</text>
+      <rect class="node" x="340" y="162" width="220" height="102" rx="4"/>
+      <text x="354" y="184" class="b">Home router</text>
+      <text x="354" y="204" class="m">192.168.1.1</text>
+      <text x="354" y="222" class="s">DHCP reservations .101 / .104</text>
+      <text x="354" y="242" class="s">bridges Wi-Fi ↔ cable</text>
 
-      <!-- k3s -->
-      <rect class="g-k3s" x="40" y="170" width="1120" height="630" rx="8"/>
-      <text x="60" y="194" class="lab">K3S CLUSTER</text>
-      <text x="1140" y="194" text-anchor="end" class="s">k3s v1.36.5 · containerd · Flannel pods 10.42.0.0/24 · NetworkPolicy enforced</text>
+      <rect class="ns-edge" x="600" y="162" width="560" height="102" rx="6"/>
+      <text x="616" y="184" class="b">Raspberry Pi gateway · 192.168.1.104 (Wi-Fi) · always on</text>
+      <text x="616" y="206" class="m">nginx :443 / :80</text>
+      <text x="616" y="224" class="s">TCP pass-through → .101</text>
+      <text x="616" y="242" class="s">server asleep → waking page</text>
+      <text x="800" y="206" class="m">waker :8081 (local)</text>
+      <text x="800" y="224" class="s">/api/wake · /api/status</text>
+      <text x="800" y="242" class="s">magic packet → UDP 9</text>
+      <text x="984" y="206" class="m">watcher :8082 (LAN)</text>
+      <text x="984" y="224" class="s">checks server every 30 s</text>
+      <text x="984" y="242" class="s">urgent alerts via ntfy</text>
+
+      <path class="flow" d="M170 104 V118 H450 V160" marker-end="url(#ah)"/>
+      <text x="300" y="127" text-anchor="middle" class="m halo">Wi-Fi · HTTPS to .104</text>
+      <path class="flow-e" d="M560 213 H598" marker-end="url(#ah-e)"/>
+      <path class="flow" d="M500 160 V106" marker-end="url(#ah)"/>
+
+      <!-- home server -->
+      <rect class="g-host" x="20" y="310" width="1160" height="880" rx="10"/>
+      <text x="40" y="335" class="lab">HOME SERVER · 192.168.1.101</text>
+      <text x="270" y="335" class="s">Dell OptiPlex 3020 · Ubuntu 26.10 · cable (enp2s0) · 16 GB · 4 cores · sleeps when idle</text>
+      <path class="flow-e" d="M895 264 V420" marker-end="url(#ah-e)"/>
+      <text x="905" y="295" class="m">via the router → 192.168.1.101 :443 / :80</text>
+
+      <rect class="g-k3s" x="40" y="350" width="1120" height="620" rx="8"/>
+      <text x="60" y="374" class="lab">K3S CLUSTER</text>
+      <text x="160" y="374" class="s">k3s v1.36.5 · one node · pods 10.42.0.0/24 · services 10.43.0.0/16 · NetworkPolicy enforced</text>
 
       <!-- row A -->
-      <rect class="ns-sys" x="60" y="210" width="340" height="135" rx="6"/>
-      <text x="76" y="230" class="m b">kube-system</text>
-      <rect class="node" x="76" y="245" width="158" height="84" rx="4"/>
-      <text x="88" y="266" class="b">Traefik ingress</text>
-      <text x="88" y="284" class="m">:80 → 301 HTTPS</text>
-      <text x="88" y="300" class="m">:443 TLS + HSTS</text>
-      <text x="88" y="316" class="s">LoadBalancer on .104</text>
-      <text x="250" y="266" class="s">CoreDNS</text>
-      <text x="250" y="284" class="s">metrics-server</text>
-      <text x="250" y="302" class="s">local-path storage</text>
-      <text x="250" y="320" class="s">API server :6443</text>
+      <rect class="ns-ci" x="60" y="390" width="340" height="140" rx="6"/>
+      <text x="76" y="410" class="m b">ci</text>
+      <text x="384" y="410" text-anchor="end" class="m s">jenkins.chatbot.local</text>
+      <rect class="node" x="76" y="422" width="150" height="92" rx="4"/>
+      <text x="88" y="442" class="b">Jenkins</text>
+      <text x="88" y="460" class="m">:8080 · JCasC</text>
+      <text x="88" y="478" class="s">admin + pipeline-viewer</text>
+      <text x="88" y="496" class="s">PVC 10 Gi</text>
+      <rect class="node" x="238" y="422" width="146" height="92" rx="4"/>
+      <text x="250" y="442" class="b">pipeline-events</text>
+      <text x="250" y="460" class="m">:8080</text>
+      <text x="250" y="478" class="s">runs, stages, logs</text>
+      <text x="250" y="496" class="s">secrets redacted</text>
+      <path class="flow" d="M238 468 H229" marker-end="url(#ah)"/>
 
-      <rect class="ns-ci" x="430" y="210" width="340" height="135" rx="6"/>
-      <text x="446" y="230" class="m b">ci</text>
-      <rect class="node" x="446" y="245" width="168" height="84" rx="4"/>
-      <text x="458" y="266" class="b">Jenkins controller</text>
-      <text x="458" y="284" class="m">:8080 · JCasC</text>
-      <text x="458" y="300" class="s">PVC 10 Gi</text>
-      <text x="458" y="316" class="s">jenkins.chatbot.local</text>
-      <text x="628" y="266" class="s">SA jenkins-deployer</text>
-      <text x="628" y="284" class="s">→ dev / qa / prod only</text>
-      <text x="628" y="302" class="s">egress :22 and :443</text>
-      <text x="628" y="320" class="s">ingress: Traefik only</text>
+      <rect class="ns-sys" x="430" y="390" width="340" height="140" rx="6"/>
+      <text x="446" y="410" class="m b">cert-manager</text>
+      <rect class="node" x="446" y="422" width="158" height="92" rx="4"/>
+      <text x="458" y="442" class="b">cert-manager</text>
+      <text x="458" y="460" class="s">controller · webhook</text>
+      <text x="458" y="478" class="s">cainjector</text>
+      <text x="458" y="496" class="s">no internet access</text>
+      <text x="620" y="442" class="s">ClusterIssuer</text>
+      <text x="620" y="460" class="m">chatbot-local-ca</text>
+      <text x="620" y="478" class="s">ECDSA P-256 CA</text>
+      <text x="620" y="496" class="s">certs: sites, DB, Pi</text>
 
-      <rect class="ns-sys" x="800" y="210" width="340" height="135" rx="6"/>
-      <text x="816" y="230" class="m b">cert-manager</text>
-      <rect class="node" x="816" y="245" width="158" height="84" rx="4"/>
-      <text x="828" y="266" class="b">cert-manager</text>
-      <text x="828" y="284" class="s">controller · webhook</text>
-      <text x="828" y="300" class="s">cainjector</text>
-      <text x="828" y="316" class="s">no internet access</text>
-      <text x="988" y="266" class="s">ClusterIssuer</text>
-      <text x="988" y="284" class="m">chatbot-local-ca</text>
-      <text x="988" y="302" class="s">ECDSA P-256 CA</text>
-      <text x="988" y="320" class="s">signs every Ingress cert</text>
-
-      <!-- browser and GitHub links -->
-      <path class="flow" d="M155 100 V243" marker-end="url(#ah)"/>
-      <text x="163" y="120" class="m">HTTPS :443</text>
-      <path class="flow" d="M530 245 V102" marker-end="url(#ah)"/>
-      <text x="538" y="120" class="m">SSH :22 · polls every 2 min</text>
+      <rect class="ns-sys" x="800" y="390" width="340" height="140" rx="6"/>
+      <text x="816" y="410" class="m b">kube-system</text>
+      <rect class="node" x="816" y="422" width="158" height="92" rx="4"/>
+      <text x="828" y="442" class="b">Traefik ingress</text>
+      <text x="828" y="460" class="m">:80 → 301 HTTPS</text>
+      <text x="828" y="478" class="m">:443 TLS + HSTS</text>
+      <text x="828" y="496" class="s">LoadBalancer .101</text>
+      <text x="990" y="442" class="s">CoreDNS :53</text>
+      <text x="990" y="460" class="s">metrics-server</text>
+      <text x="990" y="478" class="s">local-path storage</text>
+      <text x="990" y="496" class="s">API server :6443</text>
 
       <!-- Traefik routing bus -->
-      <path class="flow" d="M155 329 V365 H970"/>
-      <path class="flow" d="M230 365 V383" marker-end="url(#ah)"/>
-      <path class="flow" d="M600 365 V383" marker-end="url(#ah)"/>
-      <path class="flow" d="M970 365 V383" marker-end="url(#ah)"/>
-      <text x="250" y="359" class="s">routes by hostname: dev.chatbot.local · qa.chatbot.local · chatbot.local</text>
+      <path class="flow" d="M895 514 V548 M151 548 H970"/>
+      <path class="flow" d="M151 548 V517" marker-end="url(#ah)"/>
+      <path class="flow" d="M230 548 V568" marker-end="url(#ah)"/>
+      <path class="flow" d="M600 548 V568" marker-end="url(#ah)"/>
+      <path class="flow" d="M970 548 V568" marker-end="url(#ah)"/>
+      <text x="250" y="543" class="s">routes by host name: chatbot.local → prod · qa. → qa · dev. → dev · jenkins. → Jenkins</text>
 
       <!-- row B: app namespaces -->
-      <rect class="ns-app" x="60" y="385" width="340" height="170" rx="6"/>
-      <text x="76" y="405" class="m b">chatbot-dev</text>
-      <text x="384" y="405" text-anchor="end" class="m s">dev.chatbot.local</text>
-      <rect class="node" x="76" y="420" width="140" height="72" rx="4"/>
-      <text x="88" y="441" class="b">ui · nginx</text>
-      <text x="88" y="459" class="m">:8080</text>
-      <text x="88" y="475" class="s">static pages</text>
-      <rect class="node" x="232" y="420" width="152" height="72" rx="4"/>
-      <text x="244" y="441" class="b">chat-api</text>
-      <text x="244" y="459" class="m">FastAPI :8000</text>
-      <text x="244" y="475" class="m">metrics :9100</text>
-      <text x="76" y="520" class="s">1 api + 1 ui · quota 768 Mi</text>
-      <text x="76" y="538" class="s">own DB chat_dev · own theme</text>
+      <rect class="ns-app" x="60" y="570" width="340" height="170" rx="6"/>
+      <text x="76" y="590" class="m b">chatbot-dev</text>
+      <text x="384" y="590" text-anchor="end" class="m s">dev.chatbot.local</text>
+      <rect class="node" x="76" y="604" width="140" height="72" rx="4"/>
+      <text x="88" y="625" class="b">ui · nginx</text>
+      <text x="88" y="643" class="m">:8080</text>
+      <text x="88" y="659" class="s">static pages</text>
+      <rect class="node" x="232" y="604" width="152" height="72" rx="4"/>
+      <text x="244" y="625" class="b">chat-api</text>
+      <text x="244" y="643" class="m">FastAPI :8000</text>
+      <text x="244" y="659" class="m">metrics :9100</text>
+      <text x="76" y="702" class="s">1 api + 1 ui · quota 768 Mi</text>
+      <text x="76" y="720" class="s">DB chat_dev · colour from Be a Dev</text>
 
-      <rect class="ns-app" x="430" y="385" width="340" height="170" rx="6"/>
-      <text x="446" y="405" class="m b">chatbot-qa</text>
-      <text x="754" y="405" text-anchor="end" class="m s">qa.chatbot.local</text>
-      <rect class="node" x="446" y="420" width="140" height="72" rx="4"/>
-      <text x="458" y="441" class="b">ui · nginx</text>
-      <text x="458" y="459" class="m">:8080</text>
-      <text x="458" y="475" class="s">static pages</text>
-      <rect class="node" x="602" y="420" width="152" height="72" rx="4"/>
-      <text x="614" y="441" class="b">chat-api</text>
-      <text x="614" y="459" class="m">FastAPI :8000</text>
-      <text x="614" y="475" class="m">metrics :9100</text>
-      <text x="446" y="520" class="s">1 api + 1 ui · quota 768 Mi</text>
-      <text x="446" y="538" class="s">own DB chat_qa · same image as dev</text>
+      <rect class="ns-app" x="430" y="570" width="340" height="170" rx="6"/>
+      <text x="446" y="590" class="m b">chatbot-qa</text>
+      <text x="754" y="590" text-anchor="end" class="m s">qa.chatbot.local</text>
+      <rect class="node" x="446" y="604" width="140" height="72" rx="4"/>
+      <text x="458" y="625" class="b">ui · nginx</text>
+      <text x="458" y="643" class="m">:8080</text>
+      <text x="458" y="659" class="s">static pages</text>
+      <rect class="node" x="602" y="604" width="152" height="72" rx="4"/>
+      <text x="614" y="625" class="b">chat-api</text>
+      <text x="614" y="643" class="m">FastAPI :8000</text>
+      <text x="614" y="659" class="m">metrics :9100</text>
+      <text x="446" y="702" class="s">1 api + 1 ui · quota 768 Mi</text>
+      <text x="446" y="720" class="s">DB chat_qa · same image as dev</text>
 
-      <rect class="ns-app" x="800" y="385" width="340" height="170" rx="6"/>
-      <text x="816" y="405" class="m b">chatbot-prod</text>
-      <text x="1124" y="405" text-anchor="end" class="m s">chatbot.local</text>
-      <rect class="node" x="816" y="420" width="140" height="72" rx="4"/>
-      <text x="828" y="441" class="b">ui · nginx ×2</text>
-      <text x="828" y="459" class="m">:8080</text>
-      <text x="828" y="475" class="s">static pages</text>
-      <rect class="node" x="972" y="420" width="152" height="72" rx="4"/>
-      <text x="984" y="441" class="b">chat-api ×2–3</text>
-      <text x="984" y="459" class="m">FastAPI :8000</text>
-      <text x="984" y="475" class="m">metrics :9100</text>
-      <text x="816" y="520" class="s">HPA 2–3 api at 70% CPU · PDB</text>
-      <text x="816" y="538" class="s">quota 1.5 Gi · deploy needs approval</text>
+      <rect class="ns-app" x="800" y="570" width="340" height="170" rx="6"/>
+      <text x="816" y="590" class="m b">chatbot-prod</text>
+      <text x="1124" y="590" text-anchor="end" class="m s">chatbot.local</text>
+      <rect class="node" x="816" y="604" width="140" height="72" rx="4"/>
+      <text x="828" y="625" class="b">ui · nginx ×2</text>
+      <text x="828" y="643" class="m">:8080</text>
+      <text x="828" y="659" class="s">static pages</text>
+      <rect class="node" x="972" y="604" width="152" height="72" rx="4"/>
+      <text x="984" y="625" class="b">chat-api ×2–3</text>
+      <text x="984" y="643" class="m">FastAPI :8000</text>
+      <text x="984" y="659" class="m">metrics :9100</text>
+      <text x="816" y="702" class="s">HPA 2–3 api at 70% CPU · PDB · priority prod</text>
+      <text x="816" y="720" class="s">quota 1.5 Gi · "Ship it" by admin only</text>
 
-      <!-- api to shared bus -->
-      <path class="flow" d="M308 492 V580 M678 492 V580 M1048 492 V580 M230 580 H1048"/>
-      <path class="flow" d="M230 580 V608" marker-end="url(#ah)"/>
-      <path class="flow" d="M600 580 V608" marker-end="url(#ah)"/>
-      <path class="flow" d="M970 580 V608" marker-end="url(#ah)"/>
-      <text x="330" y="574" class="s">only chat-api pods may call these</text>
-      <text x="238" y="600" class="m">:11434</text>
-      <text x="608" y="600" class="m">:5432</text>
-      <text x="978" y="600" class="m">:9090</text>
+      <!-- api to shared -->
+      <path class="flow" d="M308 676 V752 M678 676 V752 M1048 676 V752 M230 752 H1048"/>
+      <path class="flow" d="M230 752 V778" marker-end="url(#ah)"/>
+      <path class="flow" d="M600 752 V778" marker-end="url(#ah)"/>
+      <path class="flow" d="M970 752 V778" marker-end="url(#ah)"/>
+      <text x="238" y="770" class="m">:11434</text>
+      <text x="608" y="770" class="m">:5432 · :8080</text>
+      <text x="978" y="770" class="m">:9090</text>
 
       <!-- row C: shared -->
-      <rect class="ns-shared" x="60" y="610" width="340" height="170" rx="6"/>
-      <text x="76" y="630" class="m b">ai</text>
-      <text x="384" y="630" text-anchor="end" class="s">one model for all envs</text>
-      <rect class="node" x="76" y="645" width="170" height="80" rx="4"/>
-      <text x="88" y="666" class="b">Ollama 0.30.10</text>
-      <text x="88" y="684" class="m">:11434</text>
-      <text x="88" y="700" class="m">qwen2.5:0.5b</text>
-      <text x="88" y="716" class="s">PVC 5 Gi for models</text>
-      <text x="262" y="666" class="s">limit 3 CPU · 4 Gi</text>
-      <text x="262" y="684" class="s">1 model loaded</text>
-      <text x="262" y="702" class="s">egress: internet :443</text>
-      <text x="262" y="720" class="s">(model download only)</text>
-      <text x="76" y="760" class="s">An init container pulls the model once.</text>
+      <rect class="ns-shared" x="60" y="780" width="340" height="170" rx="6"/>
+      <text x="76" y="800" class="m b">ai</text>
+      <text x="384" y="800" text-anchor="end" class="s">one model for every env</text>
+      <rect class="node" x="76" y="814" width="170" height="84" rx="4"/>
+      <text x="88" y="835" class="b">Ollama 0.30.10</text>
+      <text x="88" y="853" class="m">:11434</text>
+      <text x="88" y="871" class="m">qwen2.5:0.5b</text>
+      <text x="88" y="889" class="s">PVC 5 Gi for models</text>
+      <text x="262" y="835" class="s">limit 3 CPU · 4 Gi</text>
+      <text x="262" y="853" class="s">priority: platform</text>
+      <text x="262" y="871" class="s">out: internet :443</text>
+      <text x="262" y="889" class="s">(model download only)</text>
+      <text x="76" y="930" class="s">ollama-burst runs on the AWS node while bursting</text>
 
-      <rect class="ns-shared" x="430" y="610" width="340" height="170" rx="6"/>
-      <text x="446" y="630" class="m b">data</text>
-      <text x="754" y="630" text-anchor="end" class="s">one Postgres, all envs</text>
-      <rect class="node" x="446" y="645" width="170" height="80" rx="4"/>
-      <text x="458" y="666" class="b">Postgres 16</text>
-      <text x="458" y="684" class="m">:5432 · SCRAM</text>
-      <text x="458" y="700" class="s">PVC 2 Gi</text>
-      <text x="458" y="716" class="s">max 60 connections</text>
-      <text x="632" y="666" class="m">chat_dev</text>
-      <text x="632" y="684" class="m">chat_qa</text>
-      <text x="632" y="702" class="m">chat_prod</text>
-      <text x="632" y="720" class="s">nightly backup, 14 days</text>
-      <text x="446" y="760" class="s pl">Planned: AWS burst pods reach it via WireGuard</text>
+      <rect class="ns-shared" x="430" y="780" width="340" height="170" rx="6"/>
+      <text x="446" y="800" class="m b">data</text>
+      <text x="754" y="800" text-anchor="end" class="s">one Postgres, every env</text>
+      <rect class="node" x="446" y="814" width="154" height="84" rx="4"/>
+      <text x="458" y="835" class="b">Postgres 16</text>
+      <text x="458" y="853" class="m">:5432 · TLS 1.3</text>
+      <text x="458" y="871" class="s">chat_dev / qa / prod</text>
+      <text x="458" y="889" class="s">tunnel IP 10.200.0.1</text>
+      <rect class="node" x="610" y="814" width="144" height="84" rx="4"/>
+      <text x="622" y="835" class="b">backup-ops</text>
+      <text x="622" y="853" class="m">:8080</text>
+      <text x="622" y="871" class="s">Back up now · logs</text>
+      <text x="622" y="889" class="s">starts backup Jobs</text>
+      <text x="446" y="924" class="s">CronJobs (IST): backup 08:00 · restore test Sun 09:00</text>
+      <text x="446" y="941" class="s">off-site copy to S3 every 3 days at 09:45</text>
 
-      <rect class="ns-shared" x="800" y="610" width="340" height="170" rx="6"/>
-      <text x="816" y="630" class="m b">monitoring</text>
-      <text x="1124" y="630" text-anchor="end" class="s">private, not on ingress</text>
-      <rect class="node" x="816" y="645" width="170" height="80" rx="4"/>
-      <text x="828" y="666" class="b">Prometheus v3.5</text>
-      <text x="828" y="684" class="m">:9090</text>
-      <text x="828" y="700" class="s">scrapes every 15 s</text>
-      <text x="828" y="716" class="s">keeps 24 h / 300 MB</text>
-      <text x="1002" y="666" class="s">scrapes api :9100</text>
-      <text x="1002" y="684" class="s">+ kubelet :10250</text>
-      <text x="1002" y="702" class="s">feeds the Pulse and</text>
-      <text x="1002" y="720" class="s">Capacity pages</text>
-      <text x="816" y="760" class="s">Queried with fixed PromQL only.</text>
+      <rect class="ns-shared" x="800" y="780" width="340" height="170" rx="6"/>
+      <text x="816" y="800" class="m b">monitoring</text>
+      <text x="1124" y="800" text-anchor="end" class="s">private, not on ingress</text>
+      <rect class="node" x="816" y="814" width="150" height="84" rx="4"/>
+      <text x="828" y="835" class="b">Prometheus v3.5</text>
+      <text x="828" y="853" class="m">:9090</text>
+      <text x="828" y="871" class="s">11 alert rules</text>
+      <text x="828" y="889" class="s">keeps 24 h / 300 MB</text>
+      <rect class="node" x="976" y="814" width="148" height="84" rx="4"/>
+      <text x="988" y="835" class="b">Alertmanager</text>
+      <text x="988" y="853" class="m">:9093</text>
+      <text x="988" y="871" class="s">→ ntfy-bridge :8080</text>
+      <text x="988" y="889" class="s">→ ntfy.sh :443</text>
+      <path class="flow" d="M966 856 H974" marker-end="url(#ah)"/>
+      <text x="816" y="930" class="s">feeds Pulse and Capacity · AWS series carry cloud="aws"</text>
 
       <!-- host band, outside k3s -->
-      <rect class="node" x="60" y="830" width="340" height="150" rx="6"/>
-      <text x="76" y="852" class="b">Docker Engine</text>
-      <text x="76" y="878" class="s">make test: throwaway</text>
-      <text x="76" y="894" class="s">Postgres + Python containers</text>
-      <text x="76" y="918" class="s">make compose: optional</text>
-      <text x="76" y="934" class="s">quick test (section 6)</text>
-      <rect class="ns-sys" x="250" y="865" width="136" height="70" rx="4"/>
-      <text x="262" y="886" class="b">registry:2</text>
-      <text x="262" y="904" class="m">127.0.0.1:5000</text>
-      <text x="262" y="920" class="s">localhost only</text>
+      <rect class="node" x="60" y="990" width="340" height="176" rx="6"/>
+      <text x="76" y="1012" class="b">Docker Engine</text>
+      <text x="76" y="1036" class="s">make test: throwaway Postgres + Python</text>
+      <text x="76" y="1054" class="s">make compose: optional quick test (section 13)</text>
+      <rect class="ns-sys" x="76" y="1072" width="308" height="78" rx="4"/>
+      <text x="92" y="1094" class="b">registry:2</text>
+      <text x="92" y="1112" class="m">127.0.0.1:5000 · localhost only</text>
+      <text x="92" y="1130" class="s">read-only copy on 10.200.0.1:5000 while bursting</text>
 
-      <rect class="ns-ci" x="430" y="830" width="340" height="150" rx="6"/>
-      <text x="446" y="852" class="b">Jenkins agent (systemd service)</text>
-      <text x="446" y="876" class="s">user jenkins-agent · in the docker group</text>
-      <text x="446" y="894" class="s">docker build · hadolint · Trivy · helm</text>
-      <text x="446" y="912" class="s">kubeconfig → SA jenkins-deployer</text>
-      <text x="446" y="930" class="s">needrestart never restarts it mid-build</text>
+      <rect class="ns-ci" x="430" y="990" width="340" height="176" rx="6"/>
+      <text x="446" y="1012" class="b">Jenkins agent (systemd service)</text>
+      <text x="446" y="1036" class="s">user jenkins-agent · in the docker group</text>
+      <text x="446" y="1054" class="s">docker build · hadolint · Trivy · helm</text>
+      <text x="446" y="1072" class="s">kubeconfig → SA jenkins-deployer only</text>
+      <text x="446" y="1090" class="s">runs both jobs: chatbot and theme-deploy</text>
+      <text x="446" y="1108" class="s">reaches Jenkins at jenkins.chatbot.local</text>
+      <text x="446" y="1126" class="s">(127.0.0.1 on the server → Traefik, WebSocket)</text>
 
-      <rect class="ns-sys" x="800" y="830" width="340" height="150" rx="6"/>
-      <text x="816" y="852" class="b">Host hardening</text>
-      <text x="816" y="876" class="s">AppArmor profile k8s-chatbot on every pod</text>
-      <text x="816" y="894" class="s">kernel protections · API audit log (7 days)</text>
-      <text x="816" y="912" class="s">Kubernetes secrets encrypted at rest</text>
-      <text x="816" y="930" class="s">4 GB swap · kubelet reserves 1.25 GB</text>
+      <rect class="ns-sys" x="800" y="990" width="340" height="176" rx="6"/>
+      <text x="816" y="1012" class="b">Host services</text>
+      <text x="816" y="1036" class="s">idle check every 5 min → suspend after 30 min</text>
+      <text x="816" y="1054" class="s">Wake-on-LAN on enp2s0 · wakes itself 07:50 IST</text>
+      <text x="816" y="1072" class="s">tells the Pi before sleeping (:8082, token)</text>
+      <text x="816" y="1090" class="s">wg0 10.200.0.1 · only while AWS is up</text>
+      <text x="816" y="1108" class="s">AppArmor · API audit log · secrets encrypted</text>
+      <text x="816" y="1126" class="s">4 GB swap · kubelet reserves 1.25 GB</text>
 
-      <!-- host band links -->
-      <path class="flow" d="M318 865 V802" marker-end="url(#ah)"/>
-      <text x="326" y="820" class="s">containerd pulls images</text>
-      <path class="flow" d="M600 830 V802" marker-end="url(#ah)"/>
-      <text x="608" y="820" class="s">helm → API :6443</text>
-      <path class="flow" d="M430 900 H388" marker-end="url(#ah)"/>
-      <text x="409" y="892" text-anchor="middle" class="m halo">push</text>
-      <path class="flow dash" d="M770 905 H785 V300 H772" marker-end="url(#ah)" marker-start="url(#ah)"/>
-      <text x="797" y="760" transform="rotate(-90 797 760)" class="m">WebSocket · HTTPS</text>
+      <path class="flow" d="M330 1072 V972" marker-end="url(#ah)"/>
+      <text x="338" y="984" class="s">containerd pulls images</text>
+      <path class="flow" d="M600 990 V972" marker-end="url(#ah)"/>
+      <text x="608" y="984" class="s">helm → API :6443</text>
+      <path class="flow" d="M430 1110 H386" marker-end="url(#ah)"/>
+      <text x="408" y="1102" text-anchor="middle" class="m halo">push</text>
+
+      <!-- AWS, on demand -->
+      <rect class="ns-aws" x="20" y="1220" width="1160" height="166" rx="10"/>
+      <text x="40" y="1244" class="lab aw">AWS · AP-SOUTH-1</text>
+      <text x="170" y="1244" class="s">made with Terraform when needed and destroyed after, except the backup bucket and the guardrails</text>
+      <rect class="node" x="40" y="1258" width="360" height="112" rx="4"/>
+      <text x="54" y="1280" class="b">Cost guardrails (always on, $0)</text>
+      <text x="54" y="1300" class="s">budget $10 / month · emails at 50%, 80%, forecast</text>
+      <text x="54" y="1318" class="s">at 100%: the Terraform user can't create machines</text>
+      <text x="54" y="1336" class="s">and a kill-switch Lambda ends every EC2 instance</text>
+      <text x="54" y="1354" class="s">in every region</text>
+      <rect class="node" x="420" y="1258" width="360" height="112" rx="4"/>
+      <text x="434" y="1280" class="b">S3 backup bucket (stays)</text>
+      <text x="434" y="1300" class="s">private · encrypted · versioned · kept 30 days</text>
+      <text x="434" y="1318" class="s">upload key can only add files</text>
+      <text x="434" y="1336" class="s">off-site job uploads over :443 every 3 days</text>
+      <rect class="node" x="800" y="1258" width="360" height="112" rx="4"/>
+      <text x="814" y="1280" class="b">Burst node (Spot, 4 vCPU, on demand)</text>
+      <text x="814" y="1300" class="m">wg0 10.200.0.2 ↔ home 10.200.0.1</text>
+      <text x="814" y="1318" class="s">joins k3s: burst chat-api ×2 + its own Ollama</text>
+      <text x="814" y="1336" class="s">ends itself after 30 idle min or 6 h</text>
+      <text x="814" y="1354" class="s">section 10</text>
+      <path class="flow-w" d="M970 1166 V1256" marker-end="url(#ah-w)" marker-start="url(#ah-w)"/>
+      <text x="960" y="1209" text-anchor="end" class="m aw">WireGuard UDP 51820 · home dials out</text>
     </svg>
     </div>
-    <figcaption>Solid arrows are live traffic. The agent reaches Jenkins at https://jenkins.chatbot.local, which resolves to 127.0.0.1 on the server, so that WebSocket also goes through Traefik. Every pod runs under the restricted Pod Security Standard.</figcaption>
+    <figcaption>Pink arrows go through the Pi. On the server itself <code>/etc/hosts</code> points the four names at 127.0.0.1, so the build agent and scripts reach Traefik directly. Inside the cluster only chat-api pods may call Ollama, Postgres, backup-ops, pipeline-events and Prometheus. Every pod runs under the restricted Pod Security Standard and the AppArmor profile <code>k8s-chatbot</code>.</figcaption>
     <div class="key">
       <span><i class="lg-app"></i>App namespaces (one per environment)</span>
       <span><i class="lg-shared"></i>Shared platform</span>
-      <span><i class="lg-sys"></i>System and TLS</span>
+      <span><i class="lg-sys"></i>System, TLS and host</span>
       <span><i class="lg-ci"></i>CI/CD</span>
-      <span><i class="lg-plan"></i>Planned</span>
+      <span><i class="lg-edge"></i>Raspberry Pi gateway</span>
+      <span><i class="lg-aws"></i>AWS (on demand)</span>
     </div>
   </figure>
+</section>
 
+<!-- 2. ADDRESSES -->
+<section id="addresses">
+  <div class="sec-head">
+    <h2>2 · Addresses and ports</h2>
+    <p>Every address in use and what answers on it. The server and the Pi have DHCP reservations on the router; if either address changes, run <code>make pi-gateway</code> again.</p>
+  </div>
+  <h3 class="sub">On the home network</h3>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Address</th><th>What answers</th><th>Reachable from</th></tr></thead>
+      <thead><tr><th>Address</th><th>Port</th><th>What answers</th><th>Who uses it</th></tr></thead>
       <tbody>
-        <tr><td class="mono">https://chatbot.local</td><td>prod ui + /api</td><td>LAN, via hosts file → 192.168.1.104</td></tr>
-        <tr><td class="mono">https://qa.chatbot.local</td><td>qa ui + /api</td><td>LAN</td></tr>
-        <tr><td class="mono">https://dev.chatbot.local</td><td>dev ui + /api</td><td>LAN</td></tr>
-        <tr><td class="mono">https://jenkins.chatbot.local</td><td>Jenkins controller</td><td>LAN; the agent uses 127.0.0.1</td></tr>
+        <tr><td class="mono">192.168.1.1</td><td class="mono">—</td><td>Home router: DHCP, Wi-Fi, the way to the internet</td><td>Everything</td></tr>
+        <tr><td class="mono" rowspan="5">192.168.1.104</td><td class="mono">443, 80</td><td>Pi · nginx stream: passes TCP through to .101 unopened; if the server doesn't answer in 1 s, the waking page</td><td>Browsers on the LAN</td></tr>
+        <tr><td class="mono">5353/udp</td><td>Pi · avahi: announces chatbot.local, dev., qa., jenkins.chatbot.local</td><td>Phones and laptops looking up the names</td></tr>
+        <tr><td class="mono">8082</td><td>Pi · watcher: <code>POST /sleeping</code> (needs a token), <code>GET /watch</code></td><td>The server, before it sleeps</td></tr>
+        <tr><td class="mono">127.0.0.1:8081</td><td>Pi · waker: <code>/api/wake</code>, <code>/api/status</code>, the waking page</td><td>nginx on the Pi only</td></tr>
+        <tr><td class="mono">127.0.0.1:8443</td><td>Pi · waking page over TLS (certificate from the home CA)</td><td>nginx on the Pi only</td></tr>
+        <tr><td class="mono" rowspan="5">192.168.1.101</td><td class="mono">443, 80</td><td>Traefik (k3s LoadBalancer): the four sites, :80 sends a 301 to HTTPS</td><td>The Pi; the server itself via 127.0.0.1</td></tr>
+        <tr><td class="mono">6443</td><td>Kubernetes API</td><td>This machine; the burst node through the tunnel</td></tr>
+        <tr><td class="mono">22</td><td>SSH</td><td>You (an open SSH session keeps the server awake)</td></tr>
+        <tr><td class="mono">9/udp</td><td>Wake-on-LAN magic packet to the card's MAC (broadcast 192.168.1.255)</td><td>The Pi, or a phone app</td></tr>
         <tr><td class="mono">127.0.0.1:5000</td><td>Image registry (plain HTTP)</td><td>This machine only</td></tr>
-        <tr><td class="mono">127.0.0.1:6443</td><td>Kubernetes API</td><td>This machine; the agent has a deploy-only token</td></tr>
-        <tr><td class="mono">127.0.0.1:8080</td><td>ui in Docker Compose mode</td><td>This machine only</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3 class="sub">Inside the cluster (pods 10.42.0.0/24, services 10.43.0.0/16)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Service name</th><th>Port</th><th>What it is</th><th>Allowed callers</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">ui.chatbot-&lt;env&gt;</td><td class="mono">8080</td><td>nginx with the static pages</td><td>Traefik</td></tr>
+        <tr><td class="mono">chat-api.chatbot-&lt;env&gt;</td><td class="mono">8000 · 9100</td><td>FastAPI app · metrics</td><td>Traefik · Prometheus (metrics only)</td></tr>
+        <tr><td class="mono">ollama.ai</td><td class="mono">11434</td><td>The model (ollama-burst on AWS while bursting)</td><td>chat-api</td></tr>
+        <tr><td class="mono">postgres.data</td><td class="mono">5432</td><td>Postgres: one database and login per env</td><td>chat-api, backup job, tunnel subnet</td></tr>
+        <tr><td class="mono">backup-ops.data</td><td class="mono">8080</td><td>Backup status, run logs, Back up now</td><td>chat-api, Prometheus</td></tr>
+        <tr><td class="mono">jenkins.ci</td><td class="mono">8080</td><td>Jenkins controller</td><td>Traefik, pipeline-events</td></tr>
+        <tr><td class="mono">pipeline-events.ci</td><td class="mono">8080</td><td>Read-mostly bridge to Jenkins</td><td>chat-api</td></tr>
+        <tr><td class="mono">prometheus.monitoring</td><td class="mono">9090</td><td>Metrics and alert rules</td><td>chat-api (fixed queries)</td></tr>
+        <tr><td class="mono">alertmanager.monitoring</td><td class="mono">9093</td><td>Groups and repeats alerts</td><td>Prometheus</td></tr>
+        <tr><td class="mono">ntfy-bridge.monitoring</td><td class="mono">8080</td><td>Turns alerts into phone notifications</td><td>Alertmanager</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3 class="sub">Tunnel and AWS (only while AWS is up)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Address</th><th>Port</th><th>What answers</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">10.200.0.1</td><td class="mono">5432</td><td>Postgres (Service postgres-tunnel, externalIP)</td><td>TLS 1.3 verify-full + SCRAM, app logins only</td></tr>
+        <tr><td class="mono">10.200.0.1</td><td class="mono">5000</td><td>Read-only copy of the image registry</td><td>Nothing can be pushed through it</td></tr>
+        <tr><td class="mono">10.200.0.2</td><td class="mono">—</td><td>Burst node (k3s agent, node IP)</td><td>flannel VXLAN runs inside the tunnel</td></tr>
+        <tr><td class="mono">AWS public IP</td><td class="mono">51820/udp</td><td>WireGuard endpoint on the AWS node</td><td>Accepts only the home public IP</td></tr>
+        <tr><td class="mono">10.100.0.0/16</td><td class="mono">—</td><td>Burst VPC, 3 public subnets</td><td>Clear of the LAN, k3s and the tunnel</td></tr>
       </tbody>
     </table>
   </div>
 </section>
 
-<!-- 2. REQUEST -->
+<!-- 3. REQUEST -->
 <section id="request">
   <div class="sec-head">
-    <h2>2 · A request, end to end</h2>
-    <p>What happens when someone sends a chat message to prod.</p>
+    <h2>3 · A chat, end to end</h2>
+    <p>What happens when someone on the home Wi-Fi sends a message to prod.</p>
   </div>
   <figure>
     <div class="sheet">
-    <svg viewBox="0 0 1100 430" role="img" aria-label="The browser connects to Traefik on port 443, where TLS ends using a certificate from cert-manager. Traefik sends / to the nginx ui and /api to chat-api. chat-api calls Ollama for the answer, Postgres for history, and Prometheus for the dashboards.">
-      <rect class="ns-sys" x="290" y="20" width="200" height="64" rx="6"/>
-      <text x="306" y="44" class="b">cert-manager</text>
-      <text x="306" y="64" class="s">signs each env's cert</text>
-      <path class="flow dash" d="M390 84 V128" marker-end="url(#ah)"/>
-      <text x="398" y="110" class="s">TLS secret</text>
+    <svg viewBox="0 0 1200 470" role="img" aria-label="The browser connects to the Pi on port 443. The Pi passes the TCP stream through to Traefik on the server, where TLS ends. Traefik sends / to nginx and /api to chat-api, which takes a slot in its ModelGate, asks Ollama, stores history in Postgres, and reads metrics, backups and pipeline data from Prometheus and the helper services. While bursting, burst chat-api pods on AWS share the same Service.">
+      <rect class="ns-sys" x="450" y="20" width="200" height="60" rx="6"/>
+      <text x="466" y="44" class="b">cert-manager</text>
+      <text x="466" y="64" class="s">signs each site's cert</text>
+      <path class="flow dash" d="M550 80 V128" marker-end="url(#ah)"/>
+      <text x="558" y="108" class="s">TLS secret</text>
 
-      <rect class="ext" x="20" y="160" width="180" height="96" rx="6"/>
-      <text x="36" y="184" class="b">Browser</text>
-      <text x="36" y="204" class="m">chatbot.local</text>
-      <text x="36" y="222" class="s">hosts → 192.168.1.104</text>
-      <text x="36" y="240" class="s">trusts the local CA</text>
+      <rect class="ext" x="20" y="170" width="170" height="100" rx="6"/>
+      <text x="36" y="194" class="b">Browser</text>
+      <text x="36" y="214" class="m">chatbot.local</text>
+      <text x="36" y="232" class="s">mDNS → 192.168.1.104</text>
+      <text x="36" y="250" class="s">trusts the home CA</text>
 
-      <rect class="ns-sys" x="290" y="130" width="200" height="150" rx="6"/>
-      <text x="306" y="154" class="b">Traefik (kube-system)</text>
-      <text x="306" y="176" class="m">websecure :443</text>
-      <text x="306" y="194" class="s">TLS ends here</text>
-      <text x="306" y="212" class="s">adds HSTS (1 day)</text>
-      <text x="306" y="230" class="s">routes by Host + path</text>
-      <text x="306" y="250" class="m">web :80 → 301</text>
+      <rect class="ns-edge" x="230" y="150" width="180" height="140" rx="6"/>
+      <text x="246" y="174" class="b">Pi gateway .104</text>
+      <text x="246" y="194" class="m">nginx stream :443</text>
+      <text x="246" y="212" class="s">TCP pass-through</text>
+      <text x="246" y="230" class="s">TLS not opened here</text>
+      <text x="246" y="248" class="s">1 s to reach .101,</text>
+      <text x="246" y="266" class="s">else the waking page</text>
 
-      <path class="flow-a" d="M200 185 H288" marker-end="url(#ah-a)"/>
-      <text x="244" y="177" text-anchor="middle" class="m">HTTPS :443</text>
-      <path class="flow dash" d="M288 235 H202" marker-end="url(#ah)"/>
-      <text x="244" y="253" text-anchor="middle" class="s">plain :80 → 301</text>
+      <rect class="ns-sys" x="450" y="130" width="200" height="180" rx="6"/>
+      <text x="466" y="154" class="b">Traefik (kube-system)</text>
+      <text x="466" y="174" class="m">192.168.1.101:443</text>
+      <text x="466" y="192" class="s">TLS ends here</text>
+      <text x="466" y="210" class="s">adds HSTS (1 day)</text>
+      <text x="466" y="228" class="s">routes by host + path</text>
+      <text x="466" y="248" class="m">:80 → 301</text>
 
-      <rect class="ns-app" x="600" y="40" width="200" height="90" rx="6"/>
-      <text x="616" y="64" class="b">ui · nginx :8080</text>
-      <text x="616" y="84" class="s">HTML, JS, CSS</text>
-      <text x="616" y="102" class="s">CSP + security headers</text>
+      <path class="flow-e" d="M190 210 H228" marker-end="url(#ah-e)"/>
+      <text x="209" y="202" text-anchor="middle" class="m">:443</text>
+      <path class="flow-e" d="M410 210 H448" marker-end="url(#ah-e)"/>
+      <text x="429" y="202" text-anchor="middle" class="m">:443</text>
 
-      <rect class="ns-app" x="600" y="200" width="200" height="140" rx="6"/>
-      <text x="616" y="224" class="b">chat-api :8000</text>
-      <text x="616" y="244" class="s">FastAPI</text>
-      <text x="616" y="262" class="s">rate limits per user and IP</text>
-      <text x="616" y="280" class="s">signed HttpOnly uid cookie</text>
-      <text x="616" y="298" class="s">input validation</text>
-      <text x="616" y="320" class="m">metrics :9100 (private)</text>
+      <rect class="ns-app" x="720" y="30" width="210" height="80" rx="6"/>
+      <text x="736" y="54" class="b">ui · nginx :8080</text>
+      <text x="736" y="74" class="s">HTML, JS, CSS</text>
+      <text x="736" y="92" class="s">CSP + security headers</text>
 
-      <path class="flow-a" d="M490 160 L598 95" marker-end="url(#ah-a)"/>
-      <text x="548" y="118" text-anchor="middle" class="m halo">path /</text>
-      <path class="flow-a" d="M490 250 L598 262" marker-end="url(#ah-a)"/>
-      <text x="544" y="246" text-anchor="middle" class="m halo">path /api</text>
+      <rect class="ns-app" x="720" y="160" width="210" height="180" rx="6"/>
+      <text x="736" y="184" class="b">chat-api :8000</text>
+      <text x="736" y="204" class="s">FastAPI · signed uid cookie</text>
+      <text x="736" y="222" class="s">rate limits per visitor + IP</text>
+      <text x="736" y="244" class="m">ModelGate</text>
+      <text x="736" y="262" class="s">1 reply at a time per pod</text>
+      <text x="736" y="280" class="s">line: 2 (prod 4), wait ≤ 30 s</text>
+      <text x="736" y="298" class="s">full → 503 "Busy right now"</text>
+      <text x="736" y="324" class="m">metrics :9100 (private)</text>
 
-      <rect class="ns-shared" x="900" y="150" width="180" height="70" rx="6"/>
-      <text x="916" y="174" class="b">Ollama :11434</text>
-      <text x="916" y="194" class="m">qwen2.5:0.5b</text>
-      <text x="916" y="212" class="s">streams tokens back</text>
+      <rect class="ns-aws" x="720" y="370" width="210" height="80" rx="6"/>
+      <text x="736" y="394" class="b">chat-api-burst (AWS)</text>
+      <text x="736" y="412" class="s">same Service while bursting</text>
+      <text x="736" y="430" class="s">reached over wg0 (flannel)</text>
 
-      <rect class="ns-shared" x="900" y="245" width="180" height="80" rx="6"/>
-      <text x="916" y="269" class="b">Postgres :5432</text>
-      <text x="916" y="289" class="m">chat_&lt;env&gt; database</text>
-      <text x="916" y="307" class="s">50 users · 15 chats each</text>
+      <path class="flow-a" d="M650 160 L718 85" marker-end="url(#ah-a)"/>
+      <text x="676" y="118" text-anchor="middle" class="m halo">path /</text>
+      <path class="flow-a" d="M650 250 H718" marker-end="url(#ah-a)"/>
+      <text x="684" y="243" text-anchor="middle" class="m halo">/api</text>
+      <path class="flow-w" d="M650 290 L718 400" marker-end="url(#ah-w)"/>
 
-      <rect class="ns-shared" x="900" y="345" width="180" height="70" rx="6"/>
-      <text x="916" y="369" class="b">Prometheus :9090</text>
-      <text x="916" y="389" class="s">fixed PromQL only</text>
-      <text x="916" y="407" class="s">for /api/pulse, /api/capacity</text>
+      <rect class="ns-shared" x="990" y="130" width="190" height="64" rx="6"/>
+      <text x="1006" y="154" class="b">Ollama :11434</text>
+      <text x="1006" y="172" class="m">qwen2.5:0.5b</text>
+      <text x="1006" y="188" class="s">streams tokens back</text>
+      <rect class="ns-shared" x="990" y="210" width="190" height="64" rx="6"/>
+      <text x="1006" y="234" class="b">Postgres :5432</text>
+      <text x="1006" y="252" class="m">chat_&lt;env&gt; · TLS</text>
+      <text x="1006" y="268" class="s">50 users · 15 chats each</text>
+      <rect class="ns-shared" x="990" y="290" width="190" height="56" rx="6"/>
+      <text x="1006" y="314" class="b">Prometheus :9090</text>
+      <text x="1006" y="332" class="s">fixed queries only</text>
+      <rect class="node" x="990" y="362" width="190" height="72" rx="6"/>
+      <text x="1006" y="386" class="b">Helpers :8080</text>
+      <text x="1006" y="404" class="s">backup-ops (data)</text>
+      <text x="1006" y="422" class="s">pipeline-events (ci)</text>
 
-      <path class="flow-a" d="M800 230 L898 190" marker-end="url(#ah-a)"/>
-      <text x="846" y="200" text-anchor="middle" class="s halo">prompt</text>
-      <path class="flow-a" d="M800 285 H898" marker-end="url(#ah-a)"/>
-      <text x="849" y="278" text-anchor="middle" class="s halo">history</text>
-      <path class="flow-a" d="M800 320 L898 378" marker-end="url(#ah-a)"/>
-      <text x="842" y="362" text-anchor="middle" class="s halo">metrics</text>
+      <path class="flow-a" d="M930 200 L988 162" marker-end="url(#ah-a)"/>
+      <text x="958" y="174" text-anchor="middle" class="s halo">prompt</text>
+      <path class="flow-a" d="M930 242 H988" marker-end="url(#ah-a)"/>
+      <text x="958" y="236" text-anchor="middle" class="s halo">history</text>
+      <path class="flow-a" d="M930 290 L988 318" marker-end="url(#ah-a)"/>
+      <text x="955" y="296" text-anchor="middle" class="s halo">Pulse</text>
+      <path class="flow-a" d="M930 325 L988 395" marker-end="url(#ah-a)"/>
     </svg>
     </div>
-    <figcaption>TLS ends at Traefik; traffic inside the cluster is plain HTTP but limited by network policy. The database enforces the limits itself with triggers: it refuses a 51st user and keeps only each user's newest 15 chats.</figcaption>
+    <figcaption>TLS is opened only once, at Traefik: the Pi forwards encrypted bytes it can't read. Inside the cluster traffic is plain HTTP, limited by network policy. Postgres uses TLS too.</figcaption>
   </figure>
+  <ol class="steps">
+    <li><b>Name lookup.</b> The phone asks the network for <code>chatbot.local</code>; the Pi answers 192.168.1.104 (mDNS). The server itself uses its hosts file instead.</li>
+    <li><b>Pi.</b> nginx (stream mode) opens a TCP connection to 192.168.1.101:443 and copies bytes both ways. If the server doesn't answer within 1 second it is probably asleep, and nginx uses its backup instead: the waking page (section 4).</li>
+    <li><b>Traefik.</b> Ends TLS with the certificate cert-manager issued from the home CA, adds HSTS, and routes by host name: <code>chatbot.local</code> to prod, <code>qa.</code> to qa, <code>dev.</code> to dev. Paths under <code>/api</code> go to chat-api, everything else to nginx.</li>
+    <li><b>chat-api.</b> Gives the visitor a signed, HttpOnly <code>uid</code> cookie, applies rate limits, then asks the ModelGate for the model. Each pod streams one reply at a time; up to 2 people (4 in prod) wait up to 30 s and see "you're in line". When the line is full the answer is "Busy right now… try again" (503) at once.</li>
+    <li><b>Model and data.</b> chat-api streams the prompt to Ollama (<code>ai</code>, :11434) and saves the chat in its own database (<code>chat_prod</code>, :5432, TLS). Triggers in the database refuse a 51st user and keep each user's newest 15 chats.</li>
+    <li><b>Dashboards.</b> Pulse and Capacity call <code>/api/pulse</code> and <code>/api/capacity</code>; chat-api runs fixed Prometheus queries, never one from the browser. The backups panel and the Pipeline page go through backup-ops and pipeline-events in the same way.</li>
+    <li><b>Bursting.</b> While an AWS burst node is up, burst chat-api pods carry the same label, so the prod Service also sends requests to them over the tunnel. They use their own Ollama on AWS and the home Postgres through 10.200.0.1.</li>
+  </ol>
 </section>
 
-<!-- 3. NETWORK -->
-<section id="network">
+<!-- 4. SLEEP AND WAKE -->
+<section id="wake">
   <div class="sec-head">
-    <h2>3 · Network rules: deny everything, then allow a few paths</h2>
-    <p>Every namespace starts with a default-deny NetworkPolicy for traffic in and out, plus DNS. These are the only other paths that exist.</p>
+    <h2>4 · Sleep and wake</h2>
+    <p>The server sleeps after 30 idle minutes and wakes when someone opens the site, at 07:50 IST for the morning backups, or from a Wake-on-LAN app. The Pi makes this invisible to visitors and raises the alarm if the server goes down without saying so.</p>
   </div>
   <figure>
     <div class="sheet">
-    <svg viewBox="0 0 1200 560" role="img" aria-label="Allowed paths: Traefik to ui on 8080 and to chat-api on 8000; chat-api to Ollama 11434, Postgres 5432 and Prometheus 9090; Prometheus scrapes chat-api on 9100 and the node on 6443 and 10250; Ollama to the public internet on 443. Ollama to Postgres is blocked. Every pod may use CoreDNS on 53.">
-      <rect class="ns-sys" x="30" y="210" width="180" height="70" rx="6"/>
-      <text x="46" y="236" class="b">Traefik</text>
-      <text x="46" y="256" class="m">kube-system</text>
+    <svg viewBox="0 0 1200 800" role="img" aria-label="Sequence diagram with five lifelines: browser, Pi nginx, Pi waker and watcher, home server, ntfy. A: the server is idle, tells the Pi when it will wake, sends a quiet note, sets a clock alarm and suspends. B: a browser connects to the Pi, nginx can't reach the server and serves the waking page, the page asks the waker to wake the server, the waker sends a magic packet, the page polls until the server is ready, then reloads through the pass-through. C: the watcher checks the server every 30 seconds and sends an urgent alert if it is down without an announced sleep.">
+      <!-- lifeline heads -->
+      <rect class="ext" x="20" y="20" width="180" height="50" rx="6"/>
+      <text x="36" y="42" class="b">Browser or phone</text>
+      <text x="36" y="60" class="s">on the home Wi-Fi</text>
+      <rect class="ns-edge" x="270" y="20" width="180" height="50" rx="6"/>
+      <text x="286" y="42" class="b">Pi · nginx</text>
+      <text x="286" y="60" class="s">192.168.1.104 :443 / :80</text>
+      <rect class="ns-edge" x="510" y="20" width="180" height="50" rx="6"/>
+      <text x="526" y="42" class="b">Pi · waker + watcher</text>
+      <text x="526" y="60" class="s">:8081 local · :8082 LAN</text>
+      <rect class="node" x="760" y="20" width="180" height="50" rx="6"/>
+      <text x="776" y="42" class="b">Home server</text>
+      <text x="776" y="60" class="s">192.168.1.101 · enp2s0</text>
+      <rect class="ext" x="1000" y="20" width="180" height="50" rx="6"/>
+      <text x="1016" y="42" class="b">ntfy.sh → your phone</text>
+      <text x="1016" y="60" class="s">HTTPS :443</text>
+      <path class="life" d="M110 70 V795 M360 70 V795 M600 70 V795 M850 70 V795 M1090 70 V795"/>
 
-      <rect class="ns-app" x="300" y="60" width="330" height="390" rx="8"/>
-      <text x="316" y="84" class="lab">CHATBOT-DEV / QA / PROD</text>
-      <text x="316" y="102" class="s">default deny, in and out</text>
-      <rect class="node" x="340" y="120" width="250" height="70" rx="4"/>
-      <text x="356" y="146" class="b">ui pods</text>
-      <text x="356" y="166" class="m">listen :8080</text>
-      <rect class="node" x="340" y="290" width="250" height="90" rx="4"/>
-      <text x="356" y="316" class="b">chat-api pods</text>
-      <text x="356" y="336" class="m">:8000 app</text>
-      <text x="356" y="354" class="m">:9100 metrics</text>
+      <!-- A -->
+      <rect class="phase-band" x="10" y="84" width="1180" height="24" rx="4"/>
+      <text x="22" y="100" class="lab">A · THE SERVER GOES TO SLEEP</text>
+      <rect class="note" x="700" y="116" width="330" height="28" rx="4"/>
+      <text x="712" y="134" class="s">1 · idle 30 min: no chats, builds, backups, SSH</text>
+      <path class="flow" d="M848 172 H602" marker-end="url(#ah)"/>
+      <text x="725" y="165" text-anchor="middle" class="m halo">2 · POST :8082/sleeping {until} + token</text>
+      <path class="flow" d="M852 210 H1088" marker-end="url(#ah)"/>
+      <text x="970" y="203" text-anchor="middle" class="s halo">3 · quiet note: going to sleep</text>
+      <rect class="note" x="700" y="230" width="300" height="28" rx="4"/>
+      <text x="712" y="248" class="s">4 · rtcwake alarm 07:50 IST, then suspend (S3)</text>
 
-      <rect class="ns-shared" x="760" y="40" width="190" height="70" rx="6"/>
-      <text x="776" y="66" class="b">Ollama</text>
-      <text x="776" y="86" class="m">ai · :11434</text>
-      <rect class="ns-shared" x="760" y="200" width="190" height="70" rx="6"/>
-      <text x="776" y="226" class="b">Postgres</text>
-      <text x="776" y="246" class="m">data · :5432</text>
-      <rect class="ns-shared" x="760" y="350" width="190" height="70" rx="6"/>
-      <text x="776" y="376" class="b">Prometheus</text>
-      <text x="776" y="396" class="m">monitoring · :9090</text>
+      <!-- B -->
+      <rect class="phase-band" x="10" y="276" width="1180" height="24" rx="4"/>
+      <text x="22" y="292" class="lab">B · SOMEONE OPENS THE SITE WHILE IT SLEEPS</text>
+      <path class="flow-e" d="M112 330 H358" marker-end="url(#ah-e)"/>
+      <text x="235" y="323" text-anchor="middle" class="m halo">5 · HTTPS :443 → .104</text>
+      <path class="flow-d" d="M362 370 H848" marker-end="url(#ah-d)"/>
+      <circle class="x-mark" cx="760" cy="370" r="9"/>
+      <path class="x-line" d="M755 365 L765 375 M765 365 L755 375"/>
+      <text x="480" y="363" text-anchor="middle" class="s halo dn">6 · connect .101:443 · no answer in 1 s</text>
+      <path class="flow-e" d="M358 410 H112" marker-end="url(#ah-e)"/>
+      <text x="235" y="403" text-anchor="middle" class="s halo">7 · "Waking it up…" page</text>
+      <path class="flow-e" d="M112 450 H598" marker-end="url(#ah-e)"/>
+      <text x="355" y="443" text-anchor="middle" class="m halo">8 · POST /api/wake (through nginx)</text>
+      <path class="flow-e" d="M602 490 H848" marker-end="url(#ah-e)"/>
+      <text x="725" y="483" text-anchor="middle" class="m halo">9 · magic packet · UDP 9</text>
+      <text x="725" y="506" text-anchor="middle" class="s halo">to 192.168.1.255; router passes it Wi-Fi → cable</text>
+      <path class="flow-e" d="M112 540 H598" marker-end="url(#ah-e)"/>
+      <text x="355" y="533" text-anchor="middle" class="m halo">10 · GET /api/status → "waking"</text>
+      <rect class="note" x="700" y="560" width="300" height="28" rx="4"/>
+      <text x="712" y="578" class="s">11 · wakes in ~45 s; k3s ready 1–2 min later</text>
+      <path class="flow-e" d="M602 620 H848" marker-end="url(#ah-e)"/>
+      <text x="725" y="613" text-anchor="middle" class="m halo">12 · GET /api/readyz → 200</text>
+      <path class="flow-a" d="M112 660 H848" marker-end="url(#ah-a)"/>
+      <text x="480" y="653" text-anchor="middle" class="s halo">13 · status "ready" → page reloads; nginx passes it through to Traefik</text>
 
-      <rect class="ext" x="1010" y="40" width="170" height="70" rx="6"/>
-      <text x="1026" y="66" class="b">Public internet</text>
-      <text x="1026" y="86" class="s">private ranges excluded</text>
-      <rect class="ns-sys" x="1010" y="350" width="170" height="70" rx="6"/>
-      <text x="1026" y="376" class="b">Node IP</text>
-      <text x="1026" y="396" class="m">:6443 · :10250</text>
-
-      <rect class="ns-sys" x="340" y="480" width="250" height="56" rx="6"/>
-      <text x="356" y="504" class="b">CoreDNS (kube-system)</text>
-      <text x="356" y="524" class="s">every pod may use :53, nothing else</text>
-
-      <path class="flow-a" d="M210 235 L338 160" marker-end="url(#ah-a)"/>
-      <text x="270" y="192" text-anchor="middle" class="m halo">:8080</text>
-      <path class="flow-a" d="M210 255 L338 330" marker-end="url(#ah-a)"/>
-      <text x="270" y="296" text-anchor="middle" class="m halo">:8000</text>
-      <path class="flow-a" d="M590 300 L758 80" marker-end="url(#ah-a)"/>
-      <text x="676" y="186" text-anchor="middle" class="m halo">:11434</text>
-      <path class="flow-a" d="M590 325 L758 240" marker-end="url(#ah-a)"/>
-      <text x="680" y="276" text-anchor="middle" class="m halo">:5432</text>
-      <path class="flow-a" d="M590 350 L758 380" marker-end="url(#ah-a)"/>
-      <text x="700" y="354" text-anchor="middle" class="m halo">query :9090</text>
-      <path class="flow-a" d="M758 405 L592 370" marker-end="url(#ah-a)"/>
-      <text x="690" y="414" text-anchor="middle" class="m halo">scrape :9100</text>
-      <path class="flow-a" d="M950 75 H1008" marker-end="url(#ah-a)"/>
-      <text x="979" y="68" text-anchor="middle" class="m">:443</text>
-      <path class="flow-a" d="M950 385 H1008" marker-end="url(#ah-a)"/>
-      <text x="979" y="378" text-anchor="middle" class="s">scrape</text>
-      <path class="flow-a" d="M465 450 V478" marker-end="url(#ah-a)"/>
-      <text x="473" y="469" class="m">:53</text>
-
-      <path class="flow-d" d="M855 110 V198" marker-end="url(#ah-d)"/>
-      <circle class="x-mark" cx="855" cy="154" r="9"/>
-      <path class="x-line" d="M850 149 L860 159 M860 149 L850 159"/>
-      <text x="870" y="158" class="s dn">blocked: Ollama can't reach private IPs</text>
+      <!-- C -->
+      <rect class="phase-band" x="10" y="684" width="1180" height="24" rx="4"/>
+      <text x="22" y="700" class="lab">C · THE PI WATCHES THE SERVER</text>
+      <path class="flow dash" d="M602 740 H848" marker-end="url(#ah)"/>
+      <text x="725" y="733" text-anchor="middle" class="m halo">14 · TCP :443 every 30 s</text>
+      <path class="flow-d" d="M602 778 H1088" marker-end="url(#ah-d)"/>
+      <text x="845" y="771" text-anchor="middle" class="s halo dn">15 · down 3 min, no sleep announced → urgent "Server is down"</text>
     </svg>
     </div>
-    <figcaption>Green arrows are the complete list of allowed paths for the app and shared namespaces. Each rule names both the namespace and the pod label, so a pod in the right namespace with the wrong label is still refused.</figcaption>
+    <figcaption>The waking page uses its own certificate from the home CA (copied to the Pi by <code>make pi-gateway</code>), so the browser trusts it. nginx keeps no connections open to it (<code>keepalive_timeout 0</code>), so the reload in step 13 opens a fresh connection to the real server.</figcaption>
   </figure>
+  <div class="grid">
+    <div class="info"><h3>What keeps it awake <span class="tag">idle check</span></h3><ul>
+      <li>Any app traffic in 30 min: chats, Pulse, any <code>/api</code> call</li>
+      <li>A Jenkins build, a backup job, an AWS burst node</li>
+      <li>An SSH session (VS Code Remote counts)</li>
+      <li><code>make stay-awake</code> until <code>make allow-sleep</code></li>
+      <li>07:45–10:00 IST: backup window</li></ul></div>
+    <div class="info"><h3>Ways to wake it <span class="tag">Wake-on-LAN</span></h3><ul>
+      <li>Open any site name: the Pi sends the magic packet</li>
+      <li>Its own clock alarm at 07:50 IST (backup at 08:00)</li>
+      <li>A Wake-on-LAN phone app (broadcast 192.168.1.255, port 9)</li>
+      <li>BIOS: Wake on LAN = LAN Only, Deep Sleep off</li></ul></div>
+    <div class="info"><h3>Pi alerts <span class="tag">urgent</span></h3><ul>
+      <li>"Server is down (not asleep)": 3 min without an answer</li>
+      <li>"Didn't wake on schedule": 10 min after the planned wake</li>
+      <li>"Didn't wake after a visit": 5 min after the packet</li>
+      <li>"Server is back" when it answers again</li>
+      <li><code>make pi-quiet MINUTES=30</code> before planned work</li></ul></div>
+  </div>
+</section>
+
+<!-- 5. NETWORK -->
+<section id="network">
+  <div class="sec-head">
+    <h2>5 · Network rules: deny everything, then allow a few paths</h2>
+    <p>Every namespace starts with a default-deny NetworkPolicy for traffic in and out, plus DNS. The diagram shows the app's paths; the table lists every allowed path in the cluster.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1200 580" role="img" aria-label="Allowed paths. Traefik to ui on 8080 and chat-api on 8000. chat-api to Ollama 11434, Postgres 5432, backup-ops 8080, pipeline-events 8080 and Prometheus 9090. Prometheus scrapes chat-api on 9100. Ollama reaches the public internet on 443. The tunnel subnet reaches Postgres on 5432. backup-ops reaches the Kubernetes API on 6443. pipeline-events reaches Jenkins on 8080. Prometheus sends to Alertmanager on 9093 and scrapes the node. Ollama to Postgres is blocked.">
+      <rect class="ns-sys" x="20" y="250" width="170" height="70" rx="6"/>
+      <text x="36" y="276" class="b">Traefik</text>
+      <text x="36" y="296" class="m">kube-system</text>
+
+      <rect class="ns-app" x="250" y="40" width="300" height="440" rx="8"/>
+      <text x="266" y="64" class="lab">CHATBOT-DEV / QA / PROD</text>
+      <text x="266" y="82" class="s">default deny, in and out</text>
+      <rect class="node" x="290" y="110" width="220" height="64" rx="4"/>
+      <text x="306" y="136" class="b">ui pods</text>
+      <text x="306" y="156" class="m">listen :8080</text>
+      <rect class="node" x="290" y="260" width="220" height="110" rx="4"/>
+      <text x="306" y="286" class="b">chat-api pods</text>
+      <text x="306" y="306" class="m">:8000 app</text>
+      <text x="306" y="324" class="m">:9100 metrics</text>
+      <text x="306" y="344" class="s">(+ burst pods on AWS)</text>
+
+      <rect class="ns-sys" x="290" y="500" width="220" height="56" rx="6"/>
+      <text x="306" y="524" class="b">CoreDNS (kube-system)</text>
+      <text x="306" y="544" class="s">every pod may use :53</text>
+      <path class="flow-a" d="M400 480 V498" marker-end="url(#ah-a)"/>
+      <text x="408" y="494" class="m">:53</text>
+
+      <path class="flow-a" d="M190 270 L288 150" marker-end="url(#ah-a)"/>
+      <text x="236" y="200" text-anchor="middle" class="m halo">:8080</text>
+      <path class="flow-a" d="M190 300 L288 312" marker-end="url(#ah-a)"/>
+      <text x="236" y="318" text-anchor="middle" class="m halo">:8000</text>
+
+      <!-- targets -->
+      <rect class="ns-shared" x="640" y="30" width="210" height="62" rx="6"/>
+      <text x="656" y="56" class="b">Ollama</text>
+      <text x="656" y="76" class="m">ai · :11434</text>
+      <rect class="ns-shared" x="640" y="120" width="210" height="62" rx="6"/>
+      <text x="656" y="146" class="b">Postgres</text>
+      <text x="656" y="166" class="m">data · :5432</text>
+      <rect class="ns-shared" x="640" y="210" width="210" height="62" rx="6"/>
+      <text x="656" y="236" class="b">backup-ops</text>
+      <text x="656" y="256" class="m">data · :8080</text>
+      <rect class="ns-ci" x="640" y="300" width="210" height="62" rx="6"/>
+      <text x="656" y="326" class="b">pipeline-events</text>
+      <text x="656" y="346" class="m">ci · :8080</text>
+      <rect class="ns-shared" x="640" y="390" width="210" height="62" rx="6"/>
+      <text x="656" y="416" class="b">Prometheus</text>
+      <text x="656" y="436" class="m">monitoring · :9090</text>
+
+      <path class="flow-a" d="M510 270 L638 61" marker-end="url(#ah-a)"/>
+      <text x="582" y="150" text-anchor="middle" class="m halo">:11434</text>
+      <path class="flow-a" d="M510 285 L638 151" marker-end="url(#ah-a)"/>
+      <path class="flow-a" d="M510 300 L638 241" marker-end="url(#ah-a)"/>
+      <text x="598" y="262" text-anchor="middle" class="m halo">:8080</text>
+      <path class="flow-a" d="M510 330 L638 331" marker-end="url(#ah-a)"/>
+      <text x="598" y="324" text-anchor="middle" class="m halo">:8080</text>
+      <path class="flow-a" d="M510 352 L638 410" marker-end="url(#ah-a)"/>
+      <text x="584" y="370" text-anchor="middle" class="m halo">:9090</text>
+      <path class="flow-a" d="M638 432 L512 366" marker-end="url(#ah-a)"/>
+      <text x="560" y="418" text-anchor="middle" class="m halo">scrape :9100</text>
+      <text x="610" y="205" text-anchor="middle" class="m halo">:5432</text>
+
+      <!-- blocked -->
+      <path class="flow-d" d="M745 92 V118" marker-end="url(#ah-d)"/>
+      <circle class="x-mark" cx="745" cy="105" r="8"/>
+      <path class="x-line" d="M741 101 L749 109 M749 101 L741 109"/>
+      <text x="760" y="110" class="s dn">blocked: Ollama → private IPs</text>
+
+      <!-- far right -->
+      <rect class="ext" x="930" y="30" width="250" height="62" rx="6"/>
+      <text x="946" y="56" class="b">Public internet</text>
+      <text x="946" y="76" class="s">private ranges excluded</text>
+      <path class="flow-a" d="M850 61 H928" marker-end="url(#ah-a)"/>
+      <text x="889" y="54" text-anchor="middle" class="m">:443</text>
+
+      <rect class="ns-aws" x="930" y="120" width="250" height="62" rx="6"/>
+      <text x="946" y="146" class="b">WireGuard tunnel</text>
+      <text x="946" y="166" class="m">10.200.0.0/24 (burst pods)</text>
+      <path class="flow-w" d="M928 151 H852" marker-end="url(#ah-w)"/>
+      <text x="889" y="144" text-anchor="middle" class="m aw">:5432</text>
+
+      <rect class="ns-sys" x="930" y="210" width="250" height="62" rx="6"/>
+      <text x="946" y="236" class="b">Kubernetes API</text>
+      <text x="946" y="256" class="m">:6443 · start Jobs, read logs</text>
+      <path class="flow-a" d="M850 241 H928" marker-end="url(#ah-a)"/>
+
+      <rect class="ns-ci" x="930" y="300" width="250" height="62" rx="6"/>
+      <text x="946" y="326" class="b">Jenkins</text>
+      <text x="946" y="346" class="m">ci · :8080 (user pipeline-viewer)</text>
+      <path class="flow-a" d="M850 331 H928" marker-end="url(#ah-a)"/>
+
+      <rect class="ns-shared" x="930" y="390" width="250" height="62" rx="6"/>
+      <text x="946" y="416" class="b">Alertmanager → ntfy-bridge</text>
+      <text x="946" y="436" class="m">:9093 → :8080 → ntfy.sh :443</text>
+      <path class="flow-a" d="M850 421 H928" marker-end="url(#ah-a)"/>
+
+      <rect class="ns-sys" x="930" y="480" width="250" height="62" rx="6"/>
+      <text x="946" y="506" class="b">Node IP</text>
+      <text x="946" y="526" class="m">kubelet :10250 · API :6443</text>
+      <path class="flow-a" d="M745 452 V511 H928" marker-end="url(#ah-a)"/>
+      <text x="830" y="504" text-anchor="middle" class="s halo">scrape</text>
+    </svg>
+    </div>
+    <figcaption>Green arrows are allowed; anything not drawn or listed is refused. Each rule names both the namespace and the pod label, so a pod in the right namespace with the wrong label is still refused.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>From</th><th>To</th><th>Port</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Traefik (kube-system)</td><td>ui, chat-api (app namespaces)</td><td class="mono">8080, 8000</td><td>The sites</td></tr>
+        <tr><td>Traefik</td><td>Jenkins (ci)</td><td class="mono">8080</td><td>jenkins.chatbot.local and the agent's WebSocket</td></tr>
+        <tr><td>chat-api</td><td>Ollama, ollama-burst (ai)</td><td class="mono">11434</td><td>Answers</td></tr>
+        <tr><td>chat-api</td><td>Postgres (data)</td><td class="mono">5432</td><td>Chat history</td></tr>
+        <tr><td>chat-api</td><td>backup-ops (data)</td><td class="mono">8080</td><td>Pulse backups panel, Back up now</td></tr>
+        <tr><td>chat-api</td><td>pipeline-events (ci)</td><td class="mono">8080</td><td>Pipeline page, Be a Dev</td></tr>
+        <tr><td>chat-api</td><td>Prometheus (monitoring)</td><td class="mono">9090</td><td>Pulse and Capacity, fixed queries</td></tr>
+        <tr><td>Prometheus</td><td>chat-api · backup-ops · node</td><td class="mono">9100 · 8080 · 10250, 6443</td><td>Metrics</td></tr>
+        <tr><td>Prometheus → Alertmanager → ntfy-bridge</td><td>public internet</td><td class="mono">9093 → 8080 → 443</td><td>Phone alerts on ntfy.sh</td></tr>
+        <tr><td>pipeline-events (ci)</td><td>Jenkins (ci)</td><td class="mono">8080</td><td>Read runs and logs, start colour deploys</td></tr>
+        <tr><td>Jenkins (ci)</td><td>public internet</td><td class="mono">22, 443</td><td>GitHub, plugins</td></tr>
+        <tr><td>backup-ops (data)</td><td>Kubernetes API</td><td class="mono">443 / 6443</td><td>Start a backup Job from the CronJob, read run logs</td></tr>
+        <tr><td>postgres-backup job (data)</td><td>Postgres</td><td class="mono">5432</td><td>Nightly <code>pg_dump</code></td></tr>
+        <tr><td>postgres-offsite job (data)</td><td>public internet</td><td class="mono">443</td><td>Upload to S3</td></tr>
+        <tr><td>postgres-restore-test (data)</td><td>nothing</td><td class="mono">—</td><td>Restores into its own Postgres inside the pod</td></tr>
+        <tr><td>Ollama (ai)</td><td>public internet</td><td class="mono">443</td><td>Model download</td></tr>
+        <tr><td>Tunnel subnet 10.200.0.0/24</td><td>Postgres</td><td class="mono">5432</td><td>Burst pods; Postgres still demands TLS + SCRAM</td></tr>
+        <tr><td>cert-manager</td><td>DNS, API server · webhook from API server</td><td class="mono">53, 6443 · 10250</td><td>Issuing certificates</td></tr>
+        <tr><td>Every pod</td><td>CoreDNS</td><td class="mono">53</td><td>Name lookups</td></tr>
+      </tbody>
+    </table>
+  </div>
   <div class="grid">
     <div class="blocked">
       <strong>Blocked, and tested on every deploy by make verify</strong>
@@ -448,28 +749,29 @@
         <li>Anyone but Prometheus reading the API's metrics port :9100</li>
         <li>A privileged pod (rejected by Pod Security Admission)</li>
         <li>TLS 1.1 and plain HTTP (plain HTTP gets a 301 instead)</li>
+        <li>One environment's login opening another environment's database</li>
       </ul>
     </div>
     <div class="info">
-      <h3>ci and cert-manager <span class="tag">own rules</span></h3>
+      <h3>Outside the cluster <span class="tag">ufw + Postgres</span></h3>
       <ul>
-        <li><b>Jenkins</b>: in from Traefik on :8080 only; out on :22 and :443 (GitHub, plugins)</li>
-        <li><b>cert-manager</b>: default deny; out to DNS and the API server only; its webhook takes :10250 from the API server</li>
+        <li><b>pg_hba.conf</b>: tunnel subnet → TLS + SCRAM, app logins only, each to its own database; the superuser can't log in over the tunnel</li>
+        <li><b>wg0</b>: ufw rules allow only what the burst node needs (<code>make burst-prepare</code>)</li>
         <li><b>Known gap</b>: k3s applies egress rules a few seconds after a pod starts. Cilium or Calico would close it.</li>
       </ul>
     </div>
   </div>
 </section>
 
-<!-- 4. PIPELINE -->
+<!-- 6. PIPELINE -->
 <section id="pipeline">
   <div class="sec-head">
-    <h2>4 · CI/CD: from git push to prod</h2>
+    <h2>6 · Delivery pipeline: from git push to prod</h2>
     <p>The Jenkins controller runs in k3s; the build itself runs on the host through the agent, because it needs Docker. One image, tagged with the commit SHA, moves through dev, qa and prod.</p>
   </div>
   <figure>
     <div class="sheet">
-    <svg viewBox="0 0 1200 560" role="img" aria-label="You push to GitHub; Jenkins polls it every 2 minutes and hands the build to the host agent over a WebSocket. Eight stages run in order: checkout, build, test, Trivy scan, SBOM and push to the local registry, deploy dev, deploy qa, and ship to prod after manual approval. Each deploy runs helm upgrade then verify; if verify fails, helm rolls back.">
+    <svg viewBox="0 0 1200 560" role="img" aria-label="You push to GitHub; Jenkins polls it every 2 minutes and hands the build to the host agent over a WebSocket. Eight stages run in order: checkout, build, test, security scan, sign and box, deploy dev, deploy qa, and ship to prod after admin approval. Each deploy runs helm upgrade then verify; if verify fails, helm rolls back.">
       <rect class="ext" x="40" y="30" width="200" height="70" rx="6"/>
       <text x="56" y="56" class="b">You</text>
       <text x="56" y="76" class="m">git push origin master</text>
@@ -494,7 +796,6 @@
       <path class="flow" d="M102 156 V140 H1110 V156"/>
       <text x="110" y="132" class="s">every stage runs on the host agent, as user jenkins-agent</text>
 
-      <!-- stages: x = 40 + i*144, w 124 -->
       <g>
         <rect class="node" x="40" y="160" width="124" height="130" rx="5"/>
         <text x="50" y="182" class="m s">01</text><text x="70" y="182" class="b">Checkout</text>
@@ -517,15 +818,15 @@
         <text x="338" y="278" class="m s">≤ 15 min</text>
 
         <rect class="ns-deny" x="472" y="160" width="124" height="130" rx="5"/>
-        <text x="482" y="182" class="m s">04</text><text x="502" y="182" class="b">Trivy scan</text>
-        <text x="482" y="206" class="s">fails on fixable</text>
-        <text x="482" y="222" class="s">HIGH / CRITICAL</text>
-        <text x="482" y="238" class="s">CVEs</text>
+        <text x="482" y="182" class="m s">04</text><text x="497" y="182" class="b">Security scan</text>
+        <text x="482" y="206" class="s">Trivy: fails on</text>
+        <text x="482" y="222" class="s">fixable HIGH /</text>
+        <text x="482" y="238" class="s">CRITICAL CVEs</text>
         <text x="482" y="278" class="m s">≤ 15 min</text>
 
         <rect class="node" x="616" y="160" width="124" height="130" rx="5"/>
-        <text x="626" y="182" class="m s">05</text><text x="646" y="182" class="b">SBOM + push</text>
-        <text x="626" y="206" class="s">SPDX file per</text>
+        <text x="626" y="182" class="m s">05</text><text x="646" y="182" class="b">Sign &amp; box</text>
+        <text x="626" y="206" class="s">SPDX SBOM per</text>
         <text x="626" y="222" class="s">image (Trivy)</text>
         <text x="626" y="238" class="s">push to :5000</text>
         <text x="626" y="278" class="m s">≤ 10 min</text>
@@ -533,8 +834,8 @@
         <rect class="ns-app" x="760" y="160" width="124" height="130" rx="5"/>
         <text x="770" y="182" class="m s">06</text><text x="790" y="182" class="b">Deploy dev</text>
         <text x="770" y="206" class="s">promote.sh dev</text>
-        <text x="770" y="222" class="s">verify, else</text>
-        <text x="770" y="238" class="s">roll back</text>
+        <text x="770" y="222" class="s">keeps dev colour</text>
+        <text x="770" y="238" class="s">verify, else back</text>
         <text x="770" y="278" class="m s">≤ 15 min</text>
 
         <rect class="ns-app" x="904" y="160" width="124" height="130" rx="5"/>
@@ -546,8 +847,8 @@
 
         <rect class="gate" x="1048" y="160" width="124" height="130" rx="5"/>
         <text x="1058" y="182" class="m s">08</text><text x="1078" y="182" class="b">Ship to prod</text>
-        <text x="1058" y="206" class="s">you click</text>
-        <text x="1058" y="222" class="s">“Ship it”, then</text>
+        <text x="1058" y="206" class="s">admin clicks</text>
+        <text x="1058" y="222" class="s">"Ship it", then</text>
         <text x="1058" y="238" class="s">the same checks</text>
         <text x="1058" y="278" class="m s">waits ≤ 1 day</text>
       </g>
@@ -559,7 +860,6 @@
       <path class="flow" d="M884 225 H902" marker-end="url(#ah)"/>
       <path class="flow" d="M1028 225 H1046" marker-end="url(#ah)"/>
 
-      <!-- row 3 -->
       <rect class="node" x="40" y="360" width="260" height="110" rx="6"/>
       <text x="56" y="384" class="b">What the pipeline may touch</text>
       <text x="56" y="404" class="s">kubeconfig: SA ci/jenkins-deployer</text>
@@ -602,7 +902,7 @@
       <text x="944" y="498" text-anchor="middle" class="s halo">fail</text>
     </svg>
     </div>
-    <figcaption>Stages 6–8 all call scripts/promote.sh. A failed promotion leaves that environment on its previous release, so a red build never means a broken release is live. The approval gate doesn't hold the agent while it waits.</figcaption>
+    <figcaption>Stages 6–8 all call scripts/promote.sh. A failed promotion leaves that environment on its previous release, so a red build never means a broken release is live. The approval doesn't hold the agent while it waits, and approving a newer build cancels older ones still waiting.</figcaption>
   </figure>
   <div class="grid">
     <div class="info">
@@ -610,38 +910,418 @@
       <ul>
         <li><b>Scan</b>: <code>--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1</code>. Only problems with a fix available fail the build.</li>
         <li><b>SBOM</b>: an SPDX JSON file per image, kept with the build.</li>
-        <li>In CI a missing Trivy fails the build; locally it only warns.</li>
-        <li>The Jenkins controller image is scanned too (<code>ci/jenkins/.trivyignore</code>).</li>
+        <li>The Jenkins controller image is scanned too, and takes Debian updates when built.</li>
       </ul>
     </div>
     <div class="info">
       <h3>Images <span class="tag">build once</span></h3>
       <ul>
-        <li><b>chat-api</b>: Python 3.12 slim, multi-stage, uid 10001</li>
-        <li><b>ui</b>: nginx unprivileged, uid 101; build also reads <code>docs/</code> for the Error Journal page</li>
+        <li><b>chat-api</b>: Python slim, multi-stage, uid 10001</li>
+        <li><b>ui</b>: nginx unprivileged, uid 101; the build also reads <code>docs/</code> for the Error Journal page</li>
+        <li><b>Jenkins</b>: 2.580.2 LTS with plugins baked in</li>
         <li>OCI labels carry the git SHA; <code>--pull</code> gets base-image fixes every build</li>
       </ul>
     </div>
   </div>
 </section>
 
-<!-- 5. SECURITY -->
+<!-- 7. LIVE PIPELINE + BE A DEV -->
+<section id="live">
+  <div class="sec-head">
+    <h2>7 · Live pipeline page and Be a Dev</h2>
+    <p>The Pipeline page shows the real Jenkins runs as they happen, and the Be a Dev page starts a real deploy to dev. Neither the browser nor chat-api has a Jenkins login: a small bridge in the ci namespace does, with an account that can only read and start jobs.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1200 390" role="img" aria-label="The browser calls chat-api through Traefik. chat-api calls pipeline-events in the ci namespace on port 8080, which calls Jenkins as pipeline-viewer. For a colour deploy Jenkins hands the theme-deploy run to the host agent, which validates the colour, deploys dev with helm, and verifies theme.json over HTTPS.">
+      <rect class="ext" x="20" y="40" width="200" height="120" rx="6"/>
+      <text x="36" y="64" class="b">Browser</text>
+      <text x="36" y="84" class="m">/pipeline/</text>
+      <text x="36" y="102" class="m">/dev/ (Be a Dev)</text>
+      <text x="36" y="122" class="s">polls every 3 s while a run</text>
+      <text x="36" y="140" class="s">is going, else every 10 s</text>
+
+      <rect class="ns-sys" x="260" y="60" width="150" height="80" rx="6"/>
+      <text x="276" y="84" class="b">Traefik</text>
+      <text x="276" y="104" class="m">:443</text>
+      <text x="276" y="122" class="s">/api → chat-api</text>
+
+      <rect class="ns-app" x="450" y="30" width="230" height="150" rx="6"/>
+      <text x="466" y="54" class="b">chat-api (any env)</text>
+      <text x="466" y="76" class="m">GET /api/pipeline</text>
+      <text x="466" y="94" class="m">GET /api/pipeline/log</text>
+      <text x="466" y="112" class="m">POST /api/theme</text>
+      <text x="466" y="134" class="s">checks job, build, stage</text>
+      <text x="466" y="152" class="s">1 colour per visitor / 5 min</text>
+      <text x="466" y="170" class="s">no Jenkins login</text>
+
+      <rect class="ns-ci" x="720" y="30" width="220" height="150" rx="6"/>
+      <text x="736" y="54" class="b">pipeline-events (ci)</text>
+      <text x="736" y="74" class="m">:8080</text>
+      <text x="736" y="94" class="s">logs in as pipeline-viewer</text>
+      <text x="736" y="112" class="s">last 5 runs, cached 2 s</text>
+      <text x="736" y="130" class="s">logs: last 400 lines,</text>
+      <text x="736" y="148" class="s">passwords and keys blanked</text>
+      <text x="736" y="166" class="s">409 if a deploy is running</text>
+
+      <rect class="ns-ci" x="980" y="30" width="200" height="150" rx="6"/>
+      <text x="996" y="54" class="b">Jenkins (ci)</text>
+      <text x="996" y="74" class="m">:8080</text>
+      <text x="996" y="94" class="s">wfapi: runs, stages, logs</text>
+      <text x="996" y="112" class="s">buildWithParameters</text>
+      <text x="996" y="130" class="s">with a CSRF crumb</text>
+      <text x="996" y="148" class="s">jobs: chatbot,</text>
+      <text x="996" y="166" class="s">theme-deploy</text>
+
+      <path class="flow-a" d="M220 100 H258" marker-end="url(#ah-a)"/>
+      <path class="flow-a" d="M410 100 H448" marker-end="url(#ah-a)"/>
+      <path class="flow-a" d="M680 100 H718" marker-end="url(#ah-a)"/>
+      <text x="699" y="93" text-anchor="middle" class="m halo">:8080</text>
+      <path class="flow-a" d="M940 100 H978" marker-end="url(#ah-a)"/>
+      <text x="959" y="93" text-anchor="middle" class="m halo">:8080</text>
+
+      <path class="flow dash" d="M1080 180 V215 H120 V248" marker-end="url(#ah)"/>
+      <text x="600" y="209" text-anchor="middle" class="s halo">theme-deploy runs on the host agent (WebSocket), code from GitHub master</text>
+
+      <rect class="ns-ci" x="20" y="250" width="200" height="110" rx="6"/>
+      <text x="36" y="274" class="b">Host agent</text>
+      <text x="36" y="294" class="s">ci/theme-deploy.Jenkinsfile</text>
+      <text x="36" y="312" class="s">scripts/19-theme.sh</text>
+      <text x="36" y="330" class="s">one run at a time, 10 min max</text>
+
+      <rect class="node" x="260" y="250" width="200" height="110" rx="6"/>
+      <text x="276" y="274" class="b">1 · Validate</text>
+      <text x="276" y="294" class="s">one of six colours:</text>
+      <text x="276" y="312" class="m">teal indigo rose</text>
+      <text x="276" y="330" class="m">amber emerald slate</text>
+
+      <rect class="node" x="500" y="250" width="230" height="110" rx="6"/>
+      <text x="516" y="274" class="b">2 · Deploy dev</text>
+      <text x="516" y="294" class="s">ConfigMap chatbot-theme</text>
+      <text x="516" y="312" class="m">helm upgrade --reuse-values</text>
+      <text x="516" y="330" class="m">--set theme=&lt;colour&gt;</text>
+      <text x="516" y="348" class="s">dev only · --atomic</text>
+
+      <rect class="node" x="770" y="250" width="200" height="110" rx="6"/>
+      <text x="786" y="274" class="b">3 · Verify</text>
+      <text x="786" y="294" class="s">GET dev.chatbot.local</text>
+      <text x="786" y="312" class="m">/theme.json</text>
+      <text x="786" y="330" class="s">over HTTPS, 20 tries</text>
+
+      <rect class="ns-app" x="1010" y="250" width="170" height="110" rx="6"/>
+      <text x="1026" y="274" class="b">chatbot-dev</text>
+      <text x="1026" y="294" class="s">new colour live</text>
+      <text x="1026" y="312" class="s">~40 s after the click</text>
+
+      <path class="flow" d="M220 305 H258" marker-end="url(#ah)"/>
+      <path class="flow" d="M460 305 H498" marker-end="url(#ah)"/>
+      <path class="flow" d="M730 305 H768" marker-end="url(#ah)"/>
+      <path class="flow" d="M970 305 H1008" marker-end="url(#ah)"/>
+    </svg>
+    </div>
+    <figcaption>Pipeline deploys to dev read the chatbot-theme ConfigMap, so the next push keeps the chosen colour. qa and prod keep their own colours. If Jenkins can't be reached, the Pipeline page plays a demo build instead.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Jenkins account</th><th>Can</th><th>Can't</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">admin</td><td>Everything, including approving prod ("Ship it")</td><td>—</td></tr>
+        <tr><td class="mono">pipeline-viewer</td><td>Read jobs and builds, start a build</td><td>Manage Jenkins, script console, delete jobs, approve prod (all tested: 403)</td></tr>
+        <tr><td>Anonymous</td><td>Nothing</td><td>Everything (sign-up off)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 8. BACKUPS -->
+<section id="backups">
+  <div class="sec-head">
+    <h2>8 · Backups</h2>
+    <p>Postgres is the only data. It is backed up every morning on the server, restored as a test every Sunday, and copied to S3 every three days. The server wakes itself at 07:50 IST so the jobs can run.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1200 400" role="img" aria-label="In the data namespace, the postgres-backup CronJob dumps Postgres to the backups volume; the restore test restores the newest backup into its own Postgres with no network; the off-site job copies the newest backup to S3 over 443. backup-ops starts jobs on demand and shows their logs; chat-api calls it for the Pulse page; Prometheus scrapes it.">
+      <rect class="ns-shared" x="20" y="20" width="760" height="360" rx="8"/>
+      <text x="36" y="42" class="lab">DATA NAMESPACE</text>
+
+      <rect class="node" x="40" y="60" width="200" height="80" rx="6"/>
+      <text x="56" y="84" class="b">Postgres 16</text>
+      <text x="56" y="104" class="m">:5432</text>
+      <text x="56" y="122" class="s">chat_dev · chat_qa · chat_prod</text>
+
+      <rect class="node" x="280" y="50" width="220" height="90" rx="6"/>
+      <text x="296" y="74" class="b">postgres-backup</text>
+      <text x="296" y="94" class="m">daily 08:00 IST</text>
+      <text x="296" y="112" class="s">pg_dump × 3 + roles</text>
+      <text x="296" y="130" class="s">+ SHA-256 checksums</text>
+      <path class="flow-a" d="M280 95 H242" marker-end="url(#ah-a)"/>
+      <text x="261" y="88" text-anchor="middle" class="m halo">:5432</text>
+
+      <rect class="node" x="280" y="170" width="220" height="70" rx="6"/>
+      <text x="296" y="194" class="b">postgres-backups volume</text>
+      <text x="296" y="214" class="s">14 days · written, then renamed</text>
+      <path class="flow" d="M390 140 V168" marker-end="url(#ah)"/>
+
+      <rect class="node" x="280" y="270" width="220" height="90" rx="6"/>
+      <text x="296" y="294" class="b">postgres-restore-test</text>
+      <text x="296" y="314" class="m">Sundays 09:00 IST</text>
+      <text x="296" y="332" class="s">own Postgres inside the pod</text>
+      <text x="296" y="350" class="s">no network · checks tables</text>
+      <path class="flow" d="M390 240 V268" marker-end="url(#ah)"/>
+
+      <rect class="node" x="540" y="170" width="220" height="80" rx="6"/>
+      <text x="556" y="194" class="b">postgres-offsite</text>
+      <text x="556" y="214" class="m">every 3 days 09:45 IST</text>
+      <text x="556" y="232" class="s">newest backup → S3</text>
+      <path class="flow" d="M500 205 H538" marker-end="url(#ah)"/>
+
+      <rect class="node" x="540" y="50" width="220" height="90" rx="6"/>
+      <text x="556" y="74" class="b">backup-ops :8080</text>
+      <text x="556" y="94" class="s">status and run logs</text>
+      <text x="556" y="112" class="s">Back up now (admin password)</text>
+      <text x="556" y="130" class="s">starts Jobs via API :6443</text>
+      <path class="flow dash" d="M540 95 H502" marker-end="url(#ah)"/>
+      <text x="521" y="88" text-anchor="middle" class="s halo">starts</text>
+      <path class="flow dash" d="M650 140 V168" marker-end="url(#ah)"/>
+
+      <rect class="ns-app" x="840" y="50" width="170" height="80" rx="6"/>
+      <text x="856" y="74" class="b">chat-api</text>
+      <text x="856" y="94" class="m">/api/backups</text>
+      <text x="856" y="112" class="s">no Kubernetes access</text>
+      <path class="flow-a" d="M840 90 H762" marker-end="url(#ah-a)"/>
+      <text x="801" y="83" text-anchor="middle" class="m halo">:8080</text>
+
+      <rect class="ext" x="1040" y="50" width="140" height="80" rx="6"/>
+      <text x="1056" y="74" class="b">Pulse page</text>
+      <text x="1056" y="94" class="s">Backups panel,</text>
+      <text x="1056" y="112" class="s">logs on click</text>
+      <path class="flow-a" d="M1040 90 H1012" marker-end="url(#ah-a)"/>
+
+      <rect class="ns-shared" x="840" y="160" width="170" height="70" rx="6"/>
+      <text x="856" y="184" class="b">Prometheus</text>
+      <text x="856" y="204" class="s">BackupFailed · Overdue</text>
+      <path class="flow-a" d="M840 190 L762 125" marker-end="url(#ah-a)"/>
+      <text x="806" y="168" text-anchor="middle" class="s halo">scrape</text>
+
+      <rect class="ns-aws" x="840" y="270" width="340" height="100" rx="6"/>
+      <text x="856" y="294" class="b">S3 bucket · ap-south-1</text>
+      <text x="856" y="314" class="s">private · encrypted · versioned · kept 30 days</text>
+      <text x="856" y="332" class="s">upload key can add files, never read or delete</text>
+      <text x="856" y="350" class="s">made by terraform/backups (stays up)</text>
+      <path class="flow-w" d="M760 225 L838 300" marker-end="url(#ah-w)"/>
+      <text x="812" y="252" class="m aw halo">:443</text>
+    </svg>
+    </div>
+    <figcaption>"Back up now" runs a backup and then the off-site copy. A real restore (<code>make db-restore</code>) first takes a safety backup, stops that environment's chat-api, restores in one transaction and starts it again.</figcaption>
+  </figure>
+</section>
+
+<!-- 9. ALERTS -->
+<section id="alerts">
+  <div class="sec-head">
+    <h2>9 · Alerts to your phone</h2>
+    <p>Two independent senders: Prometheus inside the cluster for problems with the apps, and the Pi for when the whole server is gone. Both deliver through ntfy.sh to the ntfy app on your phone, on a private topic.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1200 300" role="img" aria-label="Prometheus evaluates 11 rules and sends firing alerts to Alertmanager on 9093, which groups and repeats them and sends them to ntfy-bridge on 8080, which posts to ntfy.sh on 443, which notifies your phone. Separately the Pi watcher and the sleep script post to ntfy.sh directly.">
+      <rect class="ns-shared" x="20" y="40" width="200" height="90" rx="6"/>
+      <text x="36" y="64" class="b">Prometheus</text>
+      <text x="36" y="84" class="s">11 rules, checked every 15 s</text>
+      <text x="36" y="102" class="s">memory, CPU, chats failing,</text>
+      <text x="36" y="120" class="s">backups, burst, …</text>
+
+      <rect class="ns-shared" x="270" y="40" width="200" height="90" rx="6"/>
+      <text x="286" y="64" class="b">Alertmanager :9093</text>
+      <text x="286" y="84" class="s">groups alerts (30 s)</text>
+      <text x="286" y="102" class="s">repeats 4 h · critical 1 h</text>
+      <text x="286" y="120" class="s">sends "Resolved"</text>
+
+      <rect class="ns-shared" x="520" y="40" width="200" height="90" rx="6"/>
+      <text x="536" y="64" class="b">ntfy-bridge :8080</text>
+      <text x="536" y="84" class="s">readable title and text</text>
+      <text x="536" y="102" class="s">priority from severity</text>
+      <text x="536" y="120" class="s">topic from secret ntfy</text>
+
+      <rect class="ext" x="770" y="40" width="180" height="90" rx="6"/>
+      <text x="786" y="64" class="b">ntfy.sh</text>
+      <text x="786" y="84" class="s">HTTPS :443</text>
+      <text x="786" y="102" class="s">private topic name</text>
+
+      <rect class="ext" x="1000" y="40" width="180" height="90" rx="6"/>
+      <text x="1016" y="64" class="b">Your phone</text>
+      <text x="1016" y="84" class="s">ntfy app</text>
+      <text x="1016" y="102" class="s">urgent alerts make a sound</text>
+
+      <path class="flow-a" d="M220 85 H268" marker-end="url(#ah-a)"/>
+      <path class="flow-a" d="M470 85 H518" marker-end="url(#ah-a)"/>
+      <path class="flow-a" d="M720 85 H768" marker-end="url(#ah-a)"/>
+      <path class="flow-a" d="M950 85 H998" marker-end="url(#ah-a)"/>
+
+      <rect class="ns-edge" x="520" y="190" width="200" height="90" rx="6"/>
+      <text x="536" y="214" class="b">Pi watcher</text>
+      <text x="536" y="234" class="s">server down / didn't wake</text>
+      <text x="536" y="252" class="s">"Server is back"</text>
+      <text x="536" y="270" class="s">works when the server can't</text>
+      <path class="flow-e" d="M720 215 L800 132" marker-end="url(#ah-e)"/>
+
+      <rect class="node" x="770" y="190" width="180" height="90" rx="6"/>
+      <text x="786" y="214" class="b">Sleep script (host)</text>
+      <text x="786" y="234" class="s">quiet note before</text>
+      <text x="786" y="252" class="s">it sleeps</text>
+      <path class="flow" d="M880 190 V132" marker-end="url(#ah)"/>
+    </svg>
+    </div>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Alert</th><th>Level</th><th>Fires when</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">HostMemoryCritical</td><td>critical</td><td>Home server memory above 90%</td></tr>
+        <tr><td class="mono">ChatApiDown</td><td>critical</td><td>No prod chat-api pod is up</td></tr>
+        <tr><td class="mono">ChatsFailing</td><td>critical</td><td>More than 5% of prod chats fail</td></tr>
+        <tr><td class="mono">ServerErrors</td><td>critical</td><td>More than 5% of prod requests return 5xx</td></tr>
+        <tr><td class="mono">HostCpuSaturated</td><td>warning</td><td>CPU above 90% for 15 min</td></tr>
+        <tr><td class="mono">BurstRecommended</td><td>warning</td><td>Prod at 3 of 3 home pods and the first word takes over 15 s</td></tr>
+        <tr><td class="mono">ChatsTurnedAway</td><td>warning</td><td>More than 10% of prod chats get "Busy right now"</td></tr>
+        <tr><td class="mono">ModelSaturated</td><td>warning</td><td>A queue is forming in front of the model</td></tr>
+        <tr><td class="mono">BackupFailed · BackupOverdue</td><td>warning</td><td>A backup, off-site copy or restore test failed or is late</td></tr>
+        <tr><td class="mono">BackupOpsDown</td><td>warning</td><td>backup-ops isn't answering</td></tr>
+        <tr><td class="mono">BurstNodeRunningLong</td><td>warning</td><td>An AWS burst node has been up more than 4 h</td></tr>
+        <tr><td>Pi: Server is down (not asleep)</td><td>urgent</td><td>3 min without an answer and no sleep announced</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 10. AWS -->
+<section id="aws">
+  <div class="sec-head">
+    <h2>10 · AWS on demand: burst compute, database stays home</h2>
+    <p>No RDS and nothing permanent with data. When prod needs more than its 3 home API pods, <code>make burst-up</code> makes one Spot machine in AWS that joins the home k3s cluster through a WireGuard tunnel, which the home server dials out to. The machine removes itself when idle, and <code>make burst-down</code> destroys everything.</p>
+  </div>
+  <figure>
+    <div class="sheet">
+    <svg viewBox="0 0 1200 560" role="img" aria-label="Home side: wg0 at 10.200.0.1, Postgres on 10.200.0.1:5432 with TLS and SCRAM, a read-only registry on 10.200.0.1:5000, the k3s API on 192.168.1.101:6443, the prod Service with home and burst pods, and Prometheus labelling AWS series. AWS side: a VPC 10.100.0.0/16 with a security group that only accepts WireGuard from the home IP, and the burst node at 10.200.0.2 running a k3s agent, ollama-burst and two burst chat-api pods. Below: the S3 backup bucket and the cost guardrails.">
+      <rect class="g-host" x="20" y="20" width="540" height="520" rx="10"/>
+      <text x="40" y="46" class="lab">HOME SERVER · 192.168.1.101</text>
+
+      <rect class="node" x="40" y="62" width="230" height="90" rx="6"/>
+      <text x="56" y="86" class="b">wg0 (WireGuard)</text>
+      <text x="56" y="106" class="m">10.200.0.1/24</text>
+      <text x="56" y="124" class="s">dials out; up only while AWS is</text>
+      <text x="56" y="142" class="s">ufw on wg0: only what's needed</text>
+
+      <rect class="ns-shared" x="40" y="172" width="230" height="90" rx="6"/>
+      <text x="56" y="196" class="b">postgres-tunnel</text>
+      <text x="56" y="216" class="m">10.200.0.1:5432</text>
+      <text x="56" y="234" class="s">TLS 1.3 verify-full + SCRAM</text>
+      <text x="56" y="252" class="s">app logins, own database only</text>
+
+      <rect class="ns-sys" x="40" y="282" width="230" height="80" rx="6"/>
+      <text x="56" y="306" class="b">registry (read-only)</text>
+      <text x="56" y="326" class="m">10.200.0.1:5000</text>
+      <text x="56" y="344" class="s">images for the burst node</text>
+
+      <rect class="ns-sys" x="40" y="382" width="230" height="80" rx="6"/>
+      <text x="56" y="406" class="b">k3s API server</text>
+      <text x="56" y="426" class="m">192.168.1.101:6443</text>
+      <text x="56" y="444" class="s">reached through the tunnel</text>
+
+      <rect class="ns-app" x="300" y="200" width="240" height="120" rx="6"/>
+      <text x="316" y="224" class="b">chatbot-prod Service</text>
+      <text x="316" y="244" class="s">home chat-api ×2–3</text>
+      <text x="316" y="262" class="s">+ chat-api-burst ×2 on AWS</text>
+      <text x="316" y="280" class="s">same label component=api</text>
+      <text x="316" y="298" class="s">Traefik reaches both</text>
+
+      <rect class="ns-shared" x="300" y="382" width="240" height="80" rx="6"/>
+      <text x="316" y="406" class="b">Prometheus</text>
+      <text x="316" y="426" class="s">burst series get cloud="aws"</text>
+      <text x="316" y="444" class="s">Capacity page: AWS side</text>
+      <text x="40" y="500" class="s">Data never leaves home. If the server is down, burst pods fail their</text>
+      <text x="40" y="518" class="s">readiness check, which is fine: the home model and data are down too.</text>
+
+      <rect class="ns-aws" x="640" y="20" width="540" height="520" rx="10"/>
+      <text x="660" y="46" class="lab aw">AWS · AP-SOUTH-1 · TERRAFORM</text>
+
+      <rect class="g-lan" x="660" y="60" width="500" height="290" rx="8"/>
+      <text x="676" y="80" class="lab">VPC 10.100.0.0/16 · 3 PUBLIC SUBNETS</text>
+      <rect class="node" x="680" y="92" width="460" height="52" rx="4"/>
+      <text x="696" y="114" class="b">Security group</text>
+      <text x="696" y="132" class="s">in: UDP 51820 from the home public IP only · out: :443 / :80 and home</text>
+      <rect class="node" x="680" y="156" width="460" height="180" rx="4"/>
+      <text x="696" y="180" class="b">Burst node · EC2 Fleet, Spot, 4 vCPU amd64 · $0.05–0.08/h</text>
+      <text x="696" y="200" class="m">wg0 10.200.0.2 · k3s agent, same version as home</text>
+      <text x="696" y="220" class="s">labels burst=true, cloud=aws · taint: only burst pods run here</text>
+      <text x="696" y="240" class="s">ollama-burst (ai) · chat-api-burst ×2 (chatbot-prod)</text>
+      <text x="696" y="260" class="s">picked from 10 instance types in 3 zones (Spot capacity)</text>
+      <text x="696" y="280" class="s">no SSH: commands through SSM · 30 GB disk</text>
+      <text x="696" y="300" class="s">powers off after 30 idle min or 6 h → terminated</text>
+      <text x="696" y="320" class="s">model downloaded on each start (nothing kept)</text>
+
+      <rect class="node" x="660" y="370" width="240" height="150" rx="6"/>
+      <text x="676" y="394" class="b">S3 backup bucket</text>
+      <text x="676" y="414" class="s">stays up (terraform/backups)</text>
+      <text x="676" y="432" class="s">encrypted, versioned, 30 days</text>
+      <text x="676" y="450" class="s">write-only upload key</text>
+
+      <rect class="node" x="920" y="370" width="240" height="150" rx="6"/>
+      <text x="936" y="394" class="b">Cost guardrails</text>
+      <text x="936" y="414" class="s">budget $10 / month</text>
+      <text x="936" y="432" class="s">email at 50%, 80%, forecast</text>
+      <text x="936" y="450" class="s">100%: deny-create policy on</text>
+      <text x="936" y="468" class="s">the Terraform user</text>
+      <text x="936" y="486" class="s">SNS → kill-switch Lambda:</text>
+      <text x="936" y="504" class="s">ends all EC2, every region</text>
+
+      <path class="flow-w" d="M270 100 H620 V200 H678" marker-end="url(#ah-w)" marker-start="url(#ah-w)"/>
+      <text x="425" y="92" text-anchor="middle" class="m aw halo">WireGuard UDP 51820 · home dials out</text>
+      <path class="flow-w" d="M540 260 H678" marker-end="url(#ah-w)" marker-start="url(#ah-w)"/>
+      <text x="600" y="252" text-anchor="middle" class="s aw halo">flannel</text>
+    </svg>
+    </div>
+    <figcaption>Inside the tunnel the burst node reaches only Postgres (10.200.0.1:5432), the read-only registry (10.200.0.1:5000) and the k3s API (192.168.1.101:6443, routed into the tunnel). Because home dials out, no router port forward is needed and a changed home IP doesn't break the link. Each query from AWS adds about 20–60 ms.</figcaption>
+  </figure>
+  <div class="grid">
+    <div class="info"><h3>Tunnel test <span class="tag">phase 5</span></h3><ul>
+      <li><code>make tunnel-up / tunnel-test / tunnel-down</code></li>
+      <li>A t4g.nano endpoint; 7 of 7 checks from AWS</li>
+      <li>Shares the tunnel addresses with burst: one at a time</li></ul></div>
+    <div class="info"><h3>Burst <span class="tag">phase 6</span></h3><ul>
+      <li><code>make burst-up</code>, then <code>burst-test</code> (11 checks)</li>
+      <li><code>make burst-down</code> after use, or after it ended itself</li>
+      <li>Alert <code>BurstRecommended</code> says when it's worth it</li></ul></div>
+    <div class="info"><h3>Costs <span class="tag">guardrails</span></h3><ul>
+      <li>Nothing running: $0/h (the normal state)</li>
+      <li>Billing data lags hours: a backstop, not an exact cap</li>
+      <li><code>make guardrails-status</code>, <code>guardrails-reset</code></li></ul></div>
+  </div>
+</section>
+
+<!-- 11. SECURITY -->
 <section id="security">
   <div class="sec-head">
-    <h2>5 · Security layers</h2>
+    <h2>11 · Security layers</h2>
     <p>Each layer assumes the one above it can fail.</p>
   </div>
   <div class="grid">
+    <div class="info"><h3>Edge <span class="tag">Raspberry Pi</span></h3><ul>
+      <li>Passes TLS through; holds only the waking page's certificate</li>
+      <li>Sleep notices need a token (secret <code>pi-gateway</code>)</li>
+      <li>Settings file root-only (0600)</li>
+      <li>One magic packet per 10 s at most</li></ul></div>
     <div class="info"><h3>Host <span class="tag">Ubuntu</span></h3><ul>
       <li>AppArmor profile <code>k8s-chatbot</code>: no mounts, no writes to /proc</li>
       <li>k3s <code>protect-kernel-defaults</code></li>
       <li>API audit log, 7 days</li>
-      <li>Agent is a no-login system user</li></ul></div>
+      <li>Agent is a no-login system user in a systemd sandbox</li></ul></div>
     <div class="info"><h3>Cluster <span class="tag">k3s</span></h3><ul>
       <li>Secrets encrypted at rest</li>
       <li>kubeconfig mode 0600</li>
       <li>Pipeline token limited to 3 namespaces</li>
-      <li>Prometheus discovery limited to the app namespaces</li></ul></div>
+      <li>Priority classes protect the platform first</li></ul></div>
     <div class="info"><h3>Pods <span class="tag">PSA restricted</span></h3><ul>
       <li>Non-root, read-only root filesystem</li>
       <li>All capabilities dropped, no privilege escalation</li>
@@ -651,25 +1331,73 @@
       <li>Default deny in and out everywhere</li>
       <li>Allow rules match namespace and pod label</li>
       <li>Registry and API bound to localhost</li>
-      <li>Prometheus is not on the ingress</li></ul></div>
+      <li>Prometheus and helpers are not on the ingress</li></ul></div>
     <div class="info"><h3>TLS <span class="tag">local CA</span></h3><ul>
-      <li>cert-manager, ECDSA P-256</li>
-      <li>CA key never leaves the cluster</li>
+      <li>cert-manager, ECDSA P-256; CA key stays in the cluster</li>
       <li>HTTP → HTTPS 301, HSTS, TLS 1.1 refused</li>
+      <li>Postgres TLS 1.3, renewed and reloaded automatically</li>
       <li>Secure, HttpOnly, signed cookies</li></ul></div>
+    <div class="info"><h3>CI <span class="tag">Jenkins</span></h3><ul>
+      <li>Configured as code; sign-up and anonymous off</li>
+      <li>matrix-auth: viewer can only read and start</li>
+      <li>Prod approval: admin only</li>
+      <li>Read-only deploy key; GitHub host key pinned</li></ul></div>
     <div class="info"><h3>Data and app <span class="tag">chat-api</span></h3><ul>
       <li>One database and one login per environment</li>
       <li>Limits enforced by DB triggers</li>
-      <li>Nightly backups, restore-tested weekly</li>
-      <li>Rate limits, CSP, input validation</li>
-      <li>Logs don't contain message text</li></ul></div>
+      <li>Backups daily, restore-tested weekly, off-site every 3 days</li>
+      <li>Rate limits, CSP, input validation; no message text in logs</li></ul></div>
+    <div class="info"><h3>AWS <span class="tag">profile chatbot</span></h3><ul>
+      <li>Dedicated IAM user, never root; keys only in ~/.aws</li>
+      <li>Burst node: no SSH, WireGuard from home only</li>
+      <li>S3 upload key can't read or delete</li>
+      <li>$10 budget with a kill switch</li></ul></div>
   </div>
 </section>
 
-<!-- 6. COMPOSE -->
+<!-- 12. BUDGET -->
+<section id="budget">
+  <div class="sec-head">
+    <h2>12 · Resources and overload</h2>
+    <p>Memory limits on the 16 GB host. CPU is the tighter resource: Ollama may use 3 of the 4 cores while it writes an answer.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Piece</th><th>Namespace</th><th>Priority</th><th class="num">Memory limit</th></tr></thead>
+      <tbody>
+        <tr><td>OS, k3s, Traefik, kubelet reserve</td><td>—</td><td>—</td><td class="num">~2.5 GB</td></tr>
+        <tr><td>Ollama (0.5b uses ~1 GB; room for 1.5b or 3b)</td><td class="mono">ai</td><td>platform</td><td class="num">4 GB</td></tr>
+        <tr><td>Postgres (shared_buffers 256 MB) + reload sidecar</td><td class="mono">data</td><td>platform</td><td class="num">800 MB</td></tr>
+        <tr><td>backup-ops; backup jobs only while running (256–384 MB)</td><td class="mono">data</td><td>—</td><td class="num">96 MB</td></tr>
+        <tr><td>Prometheus</td><td class="mono">monitoring</td><td>platform</td><td class="num">384 MB</td></tr>
+        <tr><td>Alertmanager + ntfy-bridge</td><td class="mono">monitoring</td><td>—</td><td class="num">160 MB</td></tr>
+        <tr><td>cert-manager, 3 pods</td><td class="mono">cert-manager</td><td>—</td><td class="num">240 MB</td></tr>
+        <tr><td>Jenkins controller (builds run on the host)</td><td class="mono">ci</td><td>—</td><td class="num">1.5 GB</td></tr>
+        <tr><td>pipeline-events</td><td class="mono">ci</td><td>—</td><td class="num">96 MB</td></tr>
+        <tr><td>prod: 2–3 api + 2 ui</td><td class="mono">chatbot-prod</td><td>prod</td><td class="num">1.5 GB</td></tr>
+        <tr><td>dev and qa, 768 MB each</td><td class="mono">chatbot-dev/qa</td><td>—</td><td class="num">1.5 GB</td></tr>
+      </tbody>
+      <tfoot><tr><td>Total, leaving ~2 GB for builds and page cache</td><td></td><td></td><td class="num">~12.8 GB</td></tr></tfoot>
+    </table>
+  </div>
+  <div class="grid">
+    <div class="info"><h3>When memory runs short <span class="tag">priority</span></h3><ul>
+      <li><b>platform</b> (1,000,000): Postgres, Ollama, Prometheus, evicted last</li>
+      <li><b>prod</b> (100,000): prod chat-api and ui</li>
+      <li><b>default</b> (0): dev, qa, Jenkins, helpers, evicted first</li>
+      <li><b>burst</b> (0, never preempts): the AWS pods, on their own quota</li></ul></div>
+    <div class="info"><h3>When too many people chat <span class="tag">ModelGate</span></h3><ul>
+      <li>Each pod streams 1 reply at a time</li>
+      <li>Line of 2 (prod 4), waiting up to 30 s: "you're in line"</li>
+      <li>Line full: "Busy right now… try again" (503) at once</li>
+      <li>Over 10% turned away → <code>ChatsTurnedAway</code>; consider burst</li></ul></div>
+  </div>
+</section>
+
+<!-- 13. COMPOSE -->
 <section id="compose">
   <div class="sec-head">
-    <h2>6 · Docker Compose mode</h2>
+    <h2>13 · Docker Compose mode</h2>
     <p>The optional quick test before k3s (<code>make compose</code>). The same images run on three Docker networks instead of NetworkPolicies.</p>
   </div>
   <figure>
@@ -716,85 +1444,26 @@
   </figure>
 </section>
 
-<!-- 7. BUDGET -->
-<section id="budget">
+<!-- 14. PHASES -->
+<section id="phases">
   <div class="sec-head">
-    <h2>7 · Resource budget</h2>
-    <p>Memory limits on the 16 GB host. CPU is the tighter resource: Ollama may use 3 of the 4 cores while it writes an answer.</p>
+    <h2>14 · Phases</h2>
+    <p>Where the project stands. Details and test results for each step are in <code>docs/updates.txt</code>; problems hit along the way are in the Error Journal.</p>
   </div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Piece</th><th>Namespace</th><th class="num">Memory limit</th></tr></thead>
-      <tbody>
-        <tr><td>OS, k3s, Traefik, kubelet reserve</td><td>—</td><td class="num">~2.5 GB</td></tr>
-        <tr><td>Ollama (0.5b uses ~1 GB; room for 1.5b or 3b)</td><td class="mono">ai</td><td class="num">4 GB</td></tr>
-        <tr><td>Postgres (shared_buffers 256 MB)</td><td class="mono">data</td><td class="num">768 MB</td></tr>
-        <tr><td>Prometheus</td><td class="mono">monitoring</td><td class="num">384 MB</td></tr>
-        <tr><td>cert-manager, 3 pods</td><td class="mono">cert-manager</td><td class="num">240 MB</td></tr>
-        <tr><td>Jenkins controller (builds run on the host)</td><td class="mono">ci</td><td class="num">1.5 GB</td></tr>
-        <tr><td>prod: 2–3 api + 2 ui</td><td class="mono">chatbot-prod</td><td class="num">1.5 GB</td></tr>
-        <tr><td>dev and qa, 768 MB each</td><td class="mono">chatbot-dev/qa</td><td class="num">1.5 GB</td></tr>
-      </tbody>
-      <tfoot><tr><td>Total, leaving ~2.5 GB for builds and page cache</td><td></td><td class="num">~12.5 GB</td></tr></tfoot>
-    </table>
-  </div>
-</section>
-
-<!-- 8. NEXT -->
-<section id="next">
-  <div class="sec-head">
-    <h2>8 · Next: AWS burst, database stays home</h2>
-    <p>Decided on 5 Nov 2026: no RDS. When prod needs more than its 3 local API pods, Terraform creates burst compute in AWS. Those pods use the home Postgres through a tunnel, and everything in AWS is destroyed when load drops.</p>
-  </div>
-  <figure>
-    <div class="sheet">
-    <svg viewBox="0 0 1100 270" role="img" aria-label="Planned. The home server's WireGuard client dials out to a WireGuard endpoint on the AWS burst node. Burst chat-api pods in AWS send SQL through the tunnel to Postgres at home. AWS holds no data.">
-      <rect class="g-host" x="20" y="20" width="470" height="230" rx="10"/>
-      <text x="40" y="46" class="lab">HOME SERVER · K3S</text>
-      <rect class="ns-shared" x="40" y="100" width="190" height="80" rx="6"/>
-      <text x="56" y="124" class="b">Postgres</text>
-      <text x="56" y="144" class="m">data · :5432</text>
-      <text x="56" y="162" class="s">TLS verify-full · SCRAM</text>
-      <rect class="node" x="280" y="100" width="190" height="80" rx="6"/>
-      <text x="296" y="124" class="b">WireGuard</text>
-      <text x="296" y="144" class="s">dials out to AWS</text>
-      <text x="296" y="162" class="s">no port forward needed</text>
-      <text x="40" y="226" class="s">Data never leaves home. Backed up nightly, kept 14 days.</text>
-
-      <rect class="ns-plan" x="610" y="20" width="470" height="230" rx="10"/>
-      <text x="630" y="46" class="lab">AWS · TERRAFORM · DESTROYED WHEN IDLE</text>
-      <rect class="node" x="630" y="100" width="190" height="80" rx="6"/>
-      <text x="646" y="124" class="b">WireGuard endpoint</text>
-      <text x="646" y="144" class="m">UDP 51820</text>
-      <text x="646" y="162" class="s">on the burst node</text>
-      <rect class="ns-app" x="870" y="100" width="190" height="80" rx="6"/>
-      <text x="886" y="124" class="b">Burst chat-api pods</text>
-      <text x="886" y="144" class="s">prod overflow (Phase 6)</text>
-      <text x="886" y="162" class="s">readiness needs the DB</text>
-      <text x="630" y="226" class="s">Nothing here holds data, so terraform destroy is always safe.</text>
-
-      <path class="flow-p" d="M470 120 H628" marker-end="url(#ah-p)"/>
-      <text x="549" y="112" text-anchor="middle" class="s pl">1 · tunnel, dialled out</text>
-      <path class="flow" d="M868 160 H822" marker-end="url(#ah)"/>
-      <path class="flow-p" d="M630 160 H472" marker-end="url(#ah-p)"/>
-      <text x="551" y="178" text-anchor="middle" class="s pl">2 · SQL inside the tunnel</text>
-      <path class="flow" d="M280 140 H232" marker-end="url(#ah)"/>
-    </svg>
-    </div>
-    <figcaption>Because home dials out, a changed home IP (like today's move to .104) doesn't break the link. Each query from AWS adds about 20–60 ms. If the home server is down, AWS pods fail their readiness check, which is acceptable because the model also lives at home.</figcaption>
-  </figure>
   <ol class="phases">
     <li class="done"><b>1–3</b>Local stack: images, k3s, platform, Helm, verify, TLS with a local CA</li>
     <li class="done"><b>4</b>Jenkins CI/CD with Trivy, SBOM, approvals and automatic rollback</li>
-    <li class="next"><b>5</b>WireGuard tunnel, Postgres TLS, NetworkPolicy rule for the tunnel subnet</li>
-    <li class="next"><b>6</b>AWS burst compute with Terraform, scraped with <code>cloud="aws"</code></li>
-    <li class="next"><b>7</b>Wake-on-LAN through SQS to a Raspberry Pi relay</li>
-    <li class="next"><b>8</b>Live Jenkins events on the Pipeline page; Colour page triggers theme-deploy</li>
+    <li class="done"><b>5</b>Postgres TLS and tunnel rules; WireGuard tunnel tested against AWS (7 of 7)</li>
+    <li class="done"><b>6</b>AWS burst compute with Terraform: Spot node joins k3s, scraped with <code>cloud="aws"</code> (11 of 11)</li>
+    <li class="done"><b>+</b>Cost guardrails ($10 budget, kill switch), off-site backups with a Pulse panel, phone alerts through ntfy, overload protection</li>
+    <li class="done"><b>7</b>Sleep when idle and Wake-on-LAN through a Raspberry Pi gateway (no SQS needed); server-down alerts from the Pi</li>
+    <li class="done"><b>8</b>Live Jenkins runs and logs on the Pipeline page; Be a Dev starts real <code>theme-deploy</code> runs on dev</li>
     <li class="next"><b>9</b>Secrets from a secrets manager (cost per secret to check)</li>
+    <li class="next"><b>open</b>Image signing (cosign + admission check), alerts for crash-looping pods, a gigabit cable for the server</li>
   </ol>
 </section>
 
-<p class="arch-foot">Drawn from the repo's manifests, Helm values, scripts and Jenkinsfile. Source: <code>app-ui/public/architecture/index.html</code>; update it when the architecture changes.</p>
+<p class="arch-foot">Drawn from the repo's manifests, Helm values, scripts, Terraform and Jenkinsfiles. Source: <code>app-ui/public/architecture/index.html</code>; update it when the architecture changes.</p>
   </main>
   <script src="/config.js"></script>
   <script src="/common.js"></script>
