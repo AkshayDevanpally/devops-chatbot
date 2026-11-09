@@ -35,6 +35,11 @@ spec:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: data } }
           podSelector: { matchLabels: { app.kubernetes.io/name: postgres } }
       ports: [{ port: 5432 }]
+    # Backups panel on Pulse.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: data } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: backup-ops } }
+      ports: [{ port: 8080 }]
     # Fixed queries for the Pulse page.
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }

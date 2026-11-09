@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Postgres backups (k8s/platform/60-backups.yaml).
+# Postgres backups (k8s/platform/60-backups.yaml) and their Pulse-page service (65-backup-ops.yaml).
 # Usage: ./scripts/10-backups.sh <command>
-#   install               apply the backup jobs and the data-namespace quota they need
+#   install               apply the backup jobs, backup-ops and the data-namespace quota they need
+#   offsite-setup         S3 bucket (terraform/backups) + write-only key as secret offsite-s3
+#   offsite-now           copy the newest backup to S3 right away and show its log
+#   admin-password        set the password for "Back up now" on the Pulse page
 #   now                   take a backup right away and show its log
 #   status                list the backups on the server and the last runs
 #   test                  restore the newest backup into a throwaway Postgres and check it
@@ -68,7 +71,56 @@ assert len(quota) == 1, "data quota not found"
 print(quota[0])' | kubectl apply -f -
     echo "==> backup jobs"
     kubectl apply -f k8s/platform/60-backups.yaml
-    echo "Installed. Nightly at 02:30 UTC, restore test Sundays 03:30 UTC. Take one now: make backup-now"
+    echo "==> backup-ops (status, logs and 'Back up now' on the Pulse page)"
+    kubectl -n $NS create configmap backup-ops-code --from-file=k8s/platform/backup-ops/backup_ops.py \
+      --dry-run=client -o yaml | kubectl apply -f -
+    kubectl apply -f k8s/platform/65-backup-ops.yaml
+    kubectl -n $NS rollout restart deployment/backup-ops >/dev/null   # pick up code changes
+    kubectl -n $NS rollout status deployment/backup-ops --timeout=120s
+    kubectl -n $NS get secret offsite-s3 >/dev/null 2>&1 || echo "Off-site copy not set up yet: make backup-offsite-setup"
+    kubectl -n $NS get secret backup-admin >/dev/null 2>&1 || echo "'Back up now' is off until: make backup-admin-password"
+    echo "Installed. Nightly 02:30 UTC, off-site every 3 days 04:15 UTC, restore test Sundays 03:30 UTC."
+    ;;
+
+  offsite-setup)
+    export AWS_PROFILE="${AWS_PROFILE:-chatbot}"
+    TF="terraform -chdir=terraform/backups"
+    $TF init -input=false >/dev/null
+    $TF apply -input=false -auto-approve
+    bucket=$($TF output -raw bucket); user=$($TF output -raw uploader_user)
+    # A new key each time, straight into the cluster: it never touches the disk or Terraform state.
+    old=$(aws iam list-access-keys --user-name "$user" --query 'AccessKeyMetadata[].AccessKeyId' --output text)
+    key=$(aws iam create-access-key --user-name "$user" --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)
+    kubectl -n $NS create secret generic offsite-s3 \
+      --from-literal=AWS_ACCESS_KEY_ID="${key%%$'\t'*}" --from-literal=AWS_SECRET_ACCESS_KEY="${key##*$'\t'}" \
+      --from-literal=BUCKET="$bucket" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    unset key
+    for k in $old; do aws iam delete-access-key --user-name "$user" --access-key-id "$k"; done
+    echo "Off-site copies go to s3://$bucket/postgres/ (write-only key in secret offsite-s3; old keys removed)."
+    echo "Test it now: make backup-offsite-now"
+    ;;
+
+  offsite-now)
+    kubectl -n $NS get secret offsite-s3 >/dev/null 2>&1 || { echo "run 'make backup-offsite-setup' first"; exit 1; }
+    name="postgres-offsite-manual-$(date -u +%Y%m%d%H%M%S)"
+    kubectl -n $NS create job "$name" --from=cronjob/postgres-offsite >/dev/null
+    echo "==> $name"
+    run_job "$name"
+    ;;
+
+  admin-password)
+    if [[ -t 0 ]]; then
+      read -r -s -p "Admin password for 'Back up now' (empty = generate one): " pw; echo
+    else
+      read -r pw || true
+    fi
+    if [[ -z $pw ]]; then pw=$(openssl rand -base64 18 | tr -d '/+=' | head -c 20); echo "Generated password: $pw"; fi
+    [[ ${#pw} -ge 8 ]] || { echo "use at least 8 characters"; exit 1; }
+    kubectl -n $NS create secret generic backup-admin --from-literal=password="$pw" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    unset pw
+    kubectl -n $NS rollout restart deployment/backup-ops >/dev/null 2>&1 || true
+    echo "Saved (secret backup-admin in namespace $NS). The Pulse page asks for it on 'Back up now'."
     ;;
 
   now)
@@ -87,7 +139,7 @@ print(quota[0])' | kubectl apply -f -
 
   status)
     echo "==> schedules"
-    kubectl -n $NS get cronjob postgres-backup postgres-restore-test
+    kubectl -n $NS get cronjob postgres-backup postgres-offsite postgres-restore-test
     echo; echo "==> recent runs"
     kubectl -n $NS get jobs --sort-by=.metadata.creationTimestamp | tail -8
     echo; echo "==> backups on the server"
@@ -181,5 +233,5 @@ YAML
     ;;
 
   *)
-    sed -n '2,10p' "$0"; exit 1 ;;
+    sed -n '2,13p' "$0"; exit 1 ;;
 esac

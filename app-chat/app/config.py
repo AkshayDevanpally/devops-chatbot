@@ -21,6 +21,9 @@ PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "")
 # Prod's local ceiling of API pods (helm values-prod: api.hpa.maxReplicas). At this many,
 # extra load is meant to burst to AWS; the Capacity page shows how close prod is.
 PROD_BURST_AT = int(os.getenv("PROD_BURST_AT", "3"))
+# backup-ops in the data namespace: backup status, logs and "Back up now" on the Pulse page.
+# Empty = the Backups panel says "not connected" (e.g. Docker Compose).
+BACKUP_OPS_URL = os.getenv("BACKUP_OPS_URL", "")
 
 MAX_USERS = 50            # enforced in the database too
 MAX_CHATS_PER_USER = 15   # enforced in the database too

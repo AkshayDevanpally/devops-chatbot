@@ -13,6 +13,8 @@ model: qwen2.5:0.5b
 ollamaUrl: http://ollama.ai.svc.cluster.local:11434
 # Private Prometheus behind the Pulse page (k8s/platform/50-prometheus.yaml). "" disables Pulse data.
 prometheusUrl: http://prometheus.monitoring.svc.cluster.local:9090
+# Backup status, logs and "Back up now" for Pulse (k8s/platform/65-backup-ops.yaml). "" hides it.
+backupOpsUrl: http://backup-ops.data.svc.cluster.local:8080
 cookieSecure: true           # uid cookie only sent over HTTPS (needs tls.enabled)
 
 # Secret created by scripts/05-secrets.sh (later: External Secrets Operator).

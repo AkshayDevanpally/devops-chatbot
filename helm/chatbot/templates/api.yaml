@@ -56,6 +56,7 @@ spec:
             - { name: APP_ENV, value: {{ .Values.env | quote }} }
             - { name: OLLAMA_URL, value: {{ .Values.ollamaUrl | quote }} }
             - { name: PROMETHEUS_URL, value: {{ .Values.prometheusUrl | quote }} }
+            - { name: BACKUP_OPS_URL, value: {{ .Values.backupOpsUrl | quote }} }
             - { name: MODEL, value: {{ .Values.model | quote }} }
             - { name: COOKIE_SECURE, value: {{ .Values.cookieSecure | quote }} }
           ports:

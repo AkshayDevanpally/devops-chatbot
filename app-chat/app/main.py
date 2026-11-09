@@ -41,6 +41,7 @@ HTTP_LATENCY = Histogram("http_request_seconds", "Time until response headers", 
 
 pool: AsyncConnectionPool | None = None
 http: httpx.AsyncClient | None = None
+backup_http: httpx.AsyncClient | None = None
 pulse_source: pulse.Pulse | None = None
 capacity_source: capacity.Capacity | None = None
 signer = URLSafeSerializer(config.SESSION_SECRET, salt="uid")
@@ -48,7 +49,7 @@ signer = URLSafeSerializer(config.SESSION_SECRET, salt="uid")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global pool, http, pulse_source, capacity_source
+    global pool, http, backup_http, pulse_source, capacity_source
     pool = AsyncConnectionPool(config.DATABASE_URL, min_size=1, max_size=5, open=False)
     await pool.open(wait=False)
     # Metrics on a separate port that is NOT behind the ingress, so they're never public.
@@ -57,12 +58,16 @@ async def lifespan(_: FastAPI):
     if config.PROMETHEUS_URL:
         pulse_source = pulse.Pulse(config.PROMETHEUS_URL, config.APP_ENV)
         capacity_source = capacity.Capacity(config.PROMETHEUS_URL, config.APP_ENV, config.PROD_BURST_AT)
-    jlog("startup", model=config.MODEL, pulse=bool(pulse_source))
+    if config.BACKUP_OPS_URL:
+        backup_http = httpx.AsyncClient(base_url=config.BACKUP_OPS_URL, timeout=httpx.Timeout(10, connect=3))
+    jlog("startup", model=config.MODEL, pulse=bool(pulse_source), backups=bool(backup_http))
     yield
     for source in (pulse_source, capacity_source):
         if source:
             await source.aclose()
     await http.aclose()
+    if backup_http:
+        await backup_http.aclose()
     await pool.close()
 
 
@@ -101,7 +106,7 @@ app.add_middleware(MetricsMiddleware)
 # ---------- tiny in-memory rate limiter (per user id + IP) ----------
 # Counts are per pod: with N API replicas a client can get up to N x the limit.
 _hits: dict[str, deque] = {}
-_LONGEST_WINDOW = 300.0   # the longest window any caller uses (theme changes)
+_LONGEST_WINDOW = 600.0   # the longest window any caller uses ("Back up now" attempts)
 _SWEEP_EVERY = 60.0
 _last_sweep = 0.0
 _now = time.monotonic
@@ -367,6 +372,53 @@ async def capacity_view(request: Request, response: Response):
         raise HTTPException(429, "too many refreshes")
     data = await capacity_source.snapshot("capacity") if capacity_source else capacity.unavailable()
     response.headers["Cache-Control"] = "no-store"
+    return data
+
+
+# ---------- Backups panel on Pulse (proxied to backup-ops; chat-api has no Kubernetes access) ----------
+class BackupRun(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
+async def backup_ops(method: str, path: str, **kw) -> tuple[int, dict]:
+    if not backup_http:
+        return 503, {"error": "backups not connected"}
+    try:
+        r = await backup_http.request(method, path, **kw)
+        return r.status_code, r.json()
+    except (httpx.HTTPError, ValueError):
+        return 502, {"error": "backup service unreachable"}
+
+
+@app.get("/api/backups")
+async def backups_view(request: Request, response: Response):
+    if rate_limited(f"backups:{request.client.host}", 30):
+        raise HTTPException(429, "too many refreshes")
+    code, data = await backup_ops("GET", "/status")
+    response.headers["Cache-Control"] = "no-store"
+    return data if code == 200 else {"available": False, "error": data.get("error", "unavailable")}
+
+
+@app.get("/api/backups/log")
+async def backup_log(request: Request, response: Response, job: str = Query(pattern=r"^[a-z0-9-]{1,63}$")):
+    if rate_limited(f"backup-log:{request.client.host}", 30):
+        raise HTTPException(429, "too many requests")
+    code, data = await backup_ops("GET", "/logs", params={"job": job})
+    if code != 200:
+        raise HTTPException(404 if code == 404 else 502, data.get("error", "log unavailable"))
+    response.headers["Cache-Control"] = "no-store"
+    return data
+
+
+@app.post("/api/backups/run", status_code=202)
+async def backup_run(body: BackupRun, request: Request):
+    # backup-ops checks the password and limits wrong guesses for everyone; this limits per IP too.
+    if rate_limited(f"backup-run:{request.client.host}", 5, window=600):
+        raise HTTPException(429, "too many attempts, try again in a few minutes")
+    code, data = await backup_ops("POST", "/run", json={"password": body.password})
+    jlog("backup_run_requested", result=code)
+    if code != 202:
+        raise HTTPException(code if code in (401, 409, 429, 503) else 502, data.get("error", "backup not started"))
     return data
 
 

@@ -36,6 +36,25 @@
     <section class="tiles" id="tiles" aria-label="Current values"></section>
     <section class="charts" id="charts"></section>
 
+    <section class="panel" id="backups" aria-labelledby="bk-title">
+      <div class="panel-head">
+        <h3 id="bk-title">Backups</h3>
+        <button type="button" id="bk-now" class="btn-small" disabled>Back up now</button>
+      </div>
+      <p class="note small">Nightly on the server (kept 14 days), copied off-site to S3 every 3 days (kept 30 days),
+        and restored as a test every Sunday. Times are your local time.</p>
+      <form id="bk-form" class="bk-form" hidden>
+        <label for="bk-pass">Admin password</label>
+        <input id="bk-pass" type="password" autocomplete="current-password" maxlength="128" required>
+        <button type="submit">Start backup</button>
+        <button type="button" id="bk-cancel" class="btn-ghost">Cancel</button>
+      </form>
+      <p class="bk-msg" id="bk-msg" aria-live="polite"></p>
+      <div class="tiles bk-tiles" id="bk-tiles"></div>
+      <h4 class="bk-sub">Recent runs <span class="muted">(open one to see its log)</span></h4>
+      <div id="bk-runs"><p class="muted">Waiting for data…</p></div>
+    </section>
+
     <section class="panel">
       <h3>Pods</h3>
       <p class="note">This environment plus the shared model, database and monitoring pods. CPU in millicores (1000m = 1 core).</p>
@@ -50,5 +69,6 @@
   <script src="/config.js"></script>
   <script src="/common.js"></script>
   <script src="/pulse/pulse.js"></script>
+  <script src="/pulse/backups.js"></script>
 </body>
 </html>

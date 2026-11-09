@@ -1,4 +1,4 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore backup-offsite-setup backup-offsite-now backup-admin-password db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
@@ -52,8 +52,17 @@ deploy-qa:     ## promote the same tag to qa
 deploy-prod:   ## promote the same tag to prod (asks for confirmation)
 	./scripts/06-deploy.sh prod
 
-backups:       ## nightly Postgres backups + weekly restore test (install/update)
+backups:       ## nightly backups, off-site every 3 days, restore test, backup-ops for Pulse (install/update)
 	./scripts/10-backups.sh install
+
+backup-offsite-setup: ## S3 bucket for off-site copies + write-only key into the cluster (once; rotates the key)
+	./scripts/10-backups.sh offsite-setup
+
+backup-offsite-now: ## copy the newest backup to S3 right away
+	./scripts/10-backups.sh offsite-now
+
+backup-admin-password: ## set the password for "Back up now" on the Pulse page
+	./scripts/10-backups.sh admin-password
 
 backup-now:    ## take a Postgres backup right away
 	./scripts/10-backups.sh now

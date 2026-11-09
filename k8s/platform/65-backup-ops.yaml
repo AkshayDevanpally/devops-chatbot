@@ -1,0 +1,110 @@
+# backup-ops: backup status, logs and "Back up now" for the Pulse page (code: backup-ops/backup_ops.py,
+# loaded as ConfigMap backup-ops-code by scripts/10-backups.sh install).
+# chat-api (internet-facing) has no Kubernetes access. It calls this service, which only chat-api may
+# reach, and which may only read the backup CronJobs, start Jobs and read logs in `data`.
+# The admin password for "Back up now" is secret backup-admin (make backup-admin-password).
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: backup-ops, namespace: data }
+automountServiceAccountToken: false     # mounted only into the backup-ops pod below
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: backup-ops, namespace: data }
+rules:
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    resourceNames: [postgres-backup, postgres-offsite, postgres-restore-test]
+    verbs: [get]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: backup-ops, namespace: data }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: backup-ops }
+subjects: [{ kind: ServiceAccount, name: backup-ops, namespace: data }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-ops
+  namespace: data
+  labels: { app.kubernetes.io/name: backup-ops }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # never two copies at once (password and limits live in the pod)
+  selector: { matchLabels: { app.kubernetes.io/name: backup-ops } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: backup-ops }
+    spec:
+      serviceAccountName: backup-ops
+      automountServiceAccountToken: true   # it talks to the Kubernetes API (Role above)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+        appArmorProfile: { type: Localhost, localhostProfile: k8s-chatbot }
+      containers:
+        - name: backup-ops
+          image: python:3.13.17-alpine3.24
+          command: ["python", "-I", "-u", "/app/backup_ops.py"]
+          env:
+            - { name: NAMESPACE, value: data }
+            - name: ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: backup-admin, key: password, optional: true } }
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 96Mi }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+          volumeMounts:
+            - { name: code, mountPath: /app, readOnly: true }
+      volumes:
+        - name: code
+          configMap: { name: backup-ops-code }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: backup-ops, namespace: data }
+spec:
+  selector: { app.kubernetes.io/name: backup-ops }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: backup-ops-allow, namespace: data }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: backup-ops } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Only the chat-api pods (for /api/backups on the Pulse page).
+    - from:
+        - namespaceSelector: { matchLabels: { chatbot.io/tier: app } }
+          podSelector: { matchLabels: { app.kubernetes.io/component: api } }
+      ports: [{ port: 8080 }]
+  egress:
+    # Kubernetes API only (it listens on the node's own IP).
+    - to:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+      ports: [{ port: 443 }, { port: 6443 }]

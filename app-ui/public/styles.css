@@ -162,6 +162,30 @@ table.dt .num { text-align: right; font-variant-numeric: tabular-nums; white-spa
 code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em;
   background: #0a1017; border: 1px solid var(--line); border-radius: 5px; padding: 0 4px; }
 
+/* pulse: backups panel */
+.panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.btn-small { padding: 7px 14px; font-size: 13px; }
+.btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.bk-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.bk-form label { font-size: 13px; color: var(--muted); }
+.bk-form input { flex: 1 1 180px; min-width: 0; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--text); font-size: 14px; }
+.bk-msg { font-size: 13px; margin: 8px 0 0; min-height: 1em; }
+.bk-msg.err { color: var(--critical); }
+.bk-tiles { margin-top: 8px; }
+.bk-tiles .value { font-size: 18px; }
+.bk-sub { margin: 16px 0 4px; font-size: 13px; font-weight: 600; }
+.bk-run { border-top: 1px solid var(--line); }
+.bk-run summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 8px 2px; cursor: pointer;
+  font-size: 13px; list-style: none; }
+.bk-run summary::-webkit-details-marker { display: none; }
+.bk-run summary::before { content: "▸"; color: var(--muted); width: 10px; }
+.bk-run[open] summary::before { content: "▾"; }
+.bk-run .what { font-weight: 600; min-width: 120px; }
+.bk-run .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.bk-run .term { margin: 0 0 10px; }
+.bk-run .term pre { max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+
 /* capacity page: local vs AWS, side by side (stacked on narrow screens) */
 .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 16px; margin-top: 18px; }
 .half { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px; border-radius: 16px;

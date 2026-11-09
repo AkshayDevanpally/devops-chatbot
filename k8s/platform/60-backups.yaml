@@ -1,7 +1,8 @@
 # Nightly Postgres backups, kept on the server for 14 days, plus a weekly restore test.
 # Managed with scripts/10-backups.sh (make backups / backup-now / backup-status / backup-test / ...).
-# Off-server copy: not set up yet. The server has one disk, so these backups protect against
-# mistakes and a damaged database, but not against losing the disk.
+# Off-server copy: every 3 days the newest backup goes to S3 (postgres-offsite below; bucket from
+# terraform/backups, set up with `make backup-offsite-setup`). Status, logs and "Back up now" are on
+# the Pulse page through backup-ops (65-backup-ops.yaml).
 apiVersion: v1
 kind: ServiceAccount
 metadata: { name: postgres-backup, namespace: data }
@@ -43,6 +44,24 @@ data:
     find /backups -mindepth 1 -maxdepth 1 -type d -name '20*' -mtime +"$((KEEP_DAYS - 1))" -exec rm -rf {} +
     echo "backup $stamp done:"; ls -l "/backups/$stamp"
     echo "backups kept:"; ls /backups | grep '^20'
+
+  offsite.sh: |
+    #!/bin/sh
+    # Copy the newest on-server backup to S3 (every 3 days, and after "Back up now" on Pulse).
+    # The key may only add files under postgres/; S3 deletes copies after 30 days.
+    set -eu
+    [ -n "${BUCKET:-}" ] || { echo "off-site copy is not set up yet: run 'make backup-offsite-setup'"; exit 1; }
+    stamp=$(cat /backups/LATEST)
+    dir="/backups/$stamp"
+    echo "== off-site copy of backup $stamp"
+    (cd "$dir" && sha256sum -c --quiet SHA256SUMS) && echo "checksums OK"
+    dest="s3://$BUCKET/postgres/$stamp/"
+    aws s3 cp "$dir/" "$dest" --recursive --sse AES256 --only-show-errors --no-progress
+    want=$(ls "$dir" | wc -l)
+    got=$(aws s3 ls "$dest" | wc -l)
+    echo "uploaded $got of $want files to $dest"
+    [ "$got" -eq "$want" ]
+    echo "off-site copy done for $stamp"
 
   restore-test.sh: |
     #!/bin/sh
@@ -201,3 +220,74 @@ spec:
   egress:
     - to: [{ podSelector: { matchLabels: { app.kubernetes.io/name: postgres } } }]
       ports: [{ port: 5432 }]
+---
+# Every 3 days (days 1, 4, 7 ... of the month), after that night's backup: copy it to S3.
+# Needs secret offsite-s3 (make backup-offsite-setup); until then each run fails at once and says so.
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: postgres-offsite, namespace: data }
+spec:
+  schedule: "15 4 */3 * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels: { app.kubernetes.io/name: postgres-offsite }   # may reach public HTTPS, not Postgres
+        spec:
+          serviceAccountName: postgres-backup
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70          # the backup files belong to uid 70, mode 0600
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile: { type: RuntimeDefault }
+            appArmorProfile: { type: Localhost, localhostProfile: k8s-chatbot }
+          containers:
+            - name: offsite
+              image: amazon/aws-cli:2.39.1
+              command: ["/bin/sh", "/scripts/offsite.sh"]
+              # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BUCKET. Optional, so that before setup the job
+              # starts and says what's missing instead of hanging on a missing secret.
+              envFrom: [{ secretRef: { name: offsite-s3, optional: true } }]
+              env:
+                - { name: AWS_REGION, value: ap-south-1 }
+                - { name: HOME, value: /tmp }
+                - { name: AWS_PAGER, value: "" }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { cpu: 500m, memory: 256Mi }
+              volumeMounts:
+                - { name: backups, mountPath: /backups, readOnly: true }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - { name: backups, persistentVolumeClaim: { claimName: postgres-backups } }
+            - { name: scripts, configMap: { name: postgres-backup-scripts } }
+            - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: postgres-offsite-egress, namespace: data }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: postgres-offsite } }
+  policyTypes: [Egress]
+  egress:
+    # S3 over HTTPS only, public addresses only.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports: [{ protocol: TCP, port: 443 }]
