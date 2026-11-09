@@ -206,7 +206,10 @@ helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n
 ## Backups (Postgres)
 
 ```bash
-make backups          # install/update: nightly backup 02:30 UTC, restore test Sundays 03:30 UTC
+make backups          # install/update: nightly 02:30 UTC, off-site every 3 days 04:15 UTC, restore test Sundays 03:30
+make backup-offsite-setup   # once: S3 bucket (terraform/backups) + write-only key into the cluster
+make backup-offsite-now     # copy the newest backup to S3 right away
+make backup-admin-password  # password for "Back up now" on the Pulse page
 make backup-now       # take one right away
 make backup-status    # what's on the server, last runs
 make backup-test      # restore the newest backup into a throwaway Postgres and check it
@@ -221,9 +224,11 @@ make db-restore ENV=dev STAMP=2026-11-05T1525Z   # replace one env's database (a
   (no network, no credentials) and checks each database's tables, retention triggers and row counts.
 - **Restoring for real:** `make db-restore` first takes a fresh safety backup, stops that environment's chat-api,
   restores in one transaction, then starts chat-api again. For prod you type `prod` to confirm.
-- **Limit:** the server has one disk, so these backups cover mistakes and a damaged database, not a dead disk.
-  An off-server copy (cloud bucket or another machine) is the next step. `make backup-download` is the manual
-  way until then.
+- **Off-site:** every 3 days the newest backup is copied to a private, encrypted S3 bucket (kept 30 days). The
+  upload key can only add files: it can't read or delete earlier copies.
+- **Pulse page:** a Backups panel shows the last and next runs, each run's log (open it), and a **Back up now**
+  button (admin password) that runs a backup and then the off-site copy. chat-api has no Kubernetes access; a
+  small `backup-ops` service in `data` does the work (`k8s/platform/65-backup-ops.yaml`).
 - The job runs with the same restrictions as every pod (non-root, read-only filesystem, AppArmor) and may reach
   only Postgres. The backup files hold chat data and password hashes; keep downloaded copies private.
 

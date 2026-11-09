@@ -10,6 +10,7 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
+ 6   9 Nov 2026    Backups: off-site S3 copy, Pulse panel, Back up now Done, checks passed
  5   9 Nov 2026    AWS cost guardrails: 10 USD budget + kill switch    Done, checks passed
  4   9 Nov 2026    Phase 6 burst compute                               Done, checks passed
  3   9 Nov 2026    Phase 5 tunnel test: Terraform + WireGuard          Done, checks passed
@@ -19,6 +20,72 @@ SUMMARY
 
 DETAILS
 -------
+
+6. Backups: off-site copy to S3, Pulse panel and "Back up now"
+
+Date:        9 November 2026
+Commands:    make backups (install/update), backup-offsite-setup, backup-offsite-now,
+             backup-admin-password (scripts/10-backups.sh); the rest as before
+Why:         the nightly backups lived on the same disk as the database, so a dead disk lost
+             both. And their status was only visible with kubectl.
+Decided:     keep nightly backups on the server and add an off-site copy every 3 days;
+             "Back up now" on Pulse needs an admin password (the site has no login).
+Changed:     k8s/platform/60-backups.yaml (offsite.sh, CronJob postgres-offsite, its network
+             rule), k8s/platform/65-backup-ops.yaml + backup-ops/backup_ops.py (new),
+             k8s/platform/10-quotas.yaml (data quota), terraform/backups/ (new),
+             app-chat (config, /api/backups endpoints, tests), helm/chatbot (BACKUP_OPS_URL,
+             egress rule), app-ui/public/pulse (Backups panel, backups.js, styles),
+             scripts/10-backups.sh, Makefile
+
+Schedules (UTC):
+- backup on the server: nightly 02:30, kept 14 days (unchanged);
+- off-site copy to S3: every 3 days at 04:15 (days 1, 4, 7 ... of the month), kept 30 days.
+  It checks the checksums, uploads the newest backup, then counts the files in S3. On
+  31-day months it runs on the 31st and the 1st (one day apart);
+- restore test: Sundays 03:30 (unchanged).
+
+Pulse page, Backups panel:
+- tiles for the last backup, last off-site copy and last restore test, each with OK, Failed
+  or Overdue (backup older than 26 h, off-site copy older than 3.5 days, restore test older
+  than 8 days) and the next run time;
+- recent runs (scheduled and manual); opening one shows its log (last 300 lines), refreshed
+  while it is open;
+- "Back up now": asks for the admin password, then runs a backup and, when it succeeds, the
+  off-site copy. The panel refreshes every 4 s while it runs, otherwise every 20 s.
+
+How it is built:
+- chat-api (the internet-facing part) still has no Kubernetes access. A small service,
+  backup-ops, runs in the data namespace (python:3.13.17-alpine3.24, standard library only,
+  nothing to build). Only chat-api pods may reach it (NetworkPolicy). Its Role allows only:
+  read the three backup CronJobs, create and list Jobs, list pods, read pod logs. It only
+  shows logs of backup-related jobs: asking for another pod's log (e.g. Postgres) gets 404.
+- chat-api proxies /api/backups, /api/backups/log?job= and /api/backups/run to it.
+- Password: secret backup-admin (make backup-admin-password; empty input generates one).
+  Wrong guesses: 5 per 15 minutes for everyone (backup-ops) and 5 per 10 minutes per IP
+  (chat-api). One backup at a time, and none within 2 minutes of the last one.
+- S3 (terraform/backups, stays up like the guardrails, well under 1 cent a month): private,
+  public access blocked, AES256 encryption, TLS only, versioned, copies expire after 30
+  days. The uploader IAM user may only add and list files under postgres/. Its access key
+  is created straight into the cluster secret offsite-s3, never on disk or in the
+  Terraform state; running offsite-setup again replaces it and deletes the old one.
+- The off-site job uses amazon/aws-cli:2.39.1 as uid 70 (the backup files are 0600), may
+  only reach public HTTPS, and mounts the backups read-only.
+
+Tests:       15 unit tests pass (4 new: not-connected, pass-through, input checks before any
+             call, per-IP limit). make verify ENV=dev 25 of 25.
+             End to end on dev: status and logs through the site; wrong password refused;
+             per-IP limit kicked in; "Back up now" ran a backup (10 s) and then the off-site
+             copy; a double click was refused; make backup-offsite-now uploaded 5 of 5 files,
+             encrypted. Uploader key: can add and list; can't read, delete, or write
+             elsewhere (checked).
+Fixed:       - the old backup-ops pod kept answering for ~30 s after a restart (Python as
+               PID 1 ignores SIGTERM): it now exits at once, and the Deployment uses
+               Recreate, so two copies with different passwords never answer together;
+             - before S3 was set up, the off-site job would hang on its missing secret until
+               its 15-minute deadline: the secret is now optional and the job stops at once
+               with "off-site copy is not set up yet".
+Status:      done on dev. qa and prod get the panel with the next pipeline run. The admin
+             password is for the owner to set (the temporary test password was removed).
 
 5. AWS cost guardrails: 10 USD budget and kill switch
 
