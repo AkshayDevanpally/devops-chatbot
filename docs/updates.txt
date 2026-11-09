@@ -10,6 +10,8 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
+ 5   9 Nov 2026    AWS cost guardrails: 10 USD budget + kill switch    Done, checks passed
+ 4   9 Nov 2026    Phase 6 burst compute: built, not run yet           Open, waiting for burst-up
  3   9 Nov 2026    Phase 5 tunnel test: Terraform + WireGuard          Done, checks passed
  2   9 Nov 2026    Phase 5 home side: Postgres TLS and tunnel rules    Done, checks passed
  1   9 Nov 2026    AWS account access for Phases 5-9                   Done
@@ -17,6 +19,110 @@ SUMMARY
 
 DETAILS
 -------
+
+5. AWS cost guardrails: 10 USD budget and kill switch
+
+Date:        9 November 2026
+Commands:    make guardrails-up, guardrails-test, guardrails-status, guardrails-reset
+             (scripts/14-guardrails.sh)
+Why:         a hard backstop so AWS can never run up a bill, even if a burst node is forgotten or
+             the timers on it fail.
+Changed:     terraform/guardrails/ (new, with lambda/kill_switch.py), scripts/14-guardrails.sh,
+             Makefile, .gitignore, README.md
+Decided:     alerts go to an email address kept only in terraform/guardrails/terraform.tfvars
+             (gitignored, never in the repo). At 100% the kill switch terminates every EC2
+             instance in every region, tagged or not: the account is used for nothing else.
+
+What happens as spend grows (budget "qwenops-monthly-10usd", whole account, monthly):
+- over 5 USD (50%) and over 8 USD (80%): email;
+- forecast to pass 10 USD this month: early-warning email;
+- over 10 USD (100%): email, plus two automatic actions:
+  1. budget action: a deny policy (qwenops-budget-deny-create) is attached to the
+     chatbot-terraform user. It blocks creating instances, Spot requests, fleets, NAT
+     gateways, Elastic IPs, autoscaling groups, ECS/EKS/RDS/Lightsail/SageMaker resources.
+     Deleting still works, so make burst-down can still clean up;
+  2. kill switch: the budget publishes to SNS (qwenops-budget-cutoff), which runs the Lambda
+     qwenops-kill-switch. In every enabled region it terminates every instance (running or
+     stopped, termination protection removed first), cancels Spot requests, deletes NAT
+     gateways and releases unattached Elastic IPs. EBS volumes and snapshots are kept.
+- make guardrails-reset gives the user its rights back (reverses the budget action, or
+  detaches the policy). If spend is still over the limit that month, it can fire again.
+
+Security:    the budget's role may only attach or detach that one policy on that one user. The
+             Lambda's role may only describe and remove EC2 compute and write its own logs
+             (kept 90 days). SNS accepts messages only from AWS Budgets for this account.
+Cost:        0 USD. This is the one AWS stack that stays up; everything else is destroyed after
+             use. Terraform state is local and gitignored.
+Limit:       AWS billing data lags by several hours, so the cut-off fires a few hours after
+             spend passes 10 USD. At the burst node's ~0.05 USD an hour that is cents; the node's
+             own idle (30 min) and max-lifetime (6 h) timers act first.
+
+Result:      13 resources created. Kill switch dry run: 17 regions checked, nothing to remove,
+             no errors. Spend this month 0.007 USD (forecast 0.03 USD); cut-off action STANDBY
+             (armed); deny policy not attached.
+Note:        the account's older "My Zero-Spend Budget" (1 USD, email only) still exists.
+Fixed:       the script first said budget emails need a confirmation click; they don't. Message
+             corrected.
+
+4. Phase 6 burst compute: built, not run yet
+
+Date:        9 November 2026
+Commands:    make burst-prepare (once, sudo), burst-up, burst-ready, burst-test, burst-down,
+             burst-status (scripts/13-burst.sh)
+Why:         the home server is the limit: one Ollama on 4 cores. Phase 6 adds a second machine
+             in AWS only while it's needed, and destroys it afterwards.
+Decided:     - what runs in AWS: extra prod chat-api pods plus their own Ollama (the model is
+               the bottleneck, so API pods alone would still queue on the home Ollama);
+             - start and stop: by hand, plus timers on the node that destroy it after 30 idle
+               minutes or 6 hours in total;
+             - machine: Spot c6a.xlarge, 4 vCPU / 8 GB, amd64 (the images are amd64), about
+               0.05 USD an hour in ap-south-1. Spot quota 256 vCPU, so no limit request needed.
+Changed:     terraform/burst/ (new), k8s/burst/ (new), scripts/13-burst.sh (new),
+             helm/chatbot (api-burst.yaml, values, networkpolicy), scripts/06-deploy.sh,
+             k8s/platform/10-quotas.yaml, k8s/platform/50-prometheus.yaml, Makefile
+
+How it works:
+- The AWS node joins the home k3s cluster as a worker over the WireGuard tunnel (home dials
+  out). k3s API, flannel pod traffic and image pulls all go through the tunnel; Postgres is
+  still not exposed anywhere.
+- Ubuntu 24.04, not Amazon Linux: every chatbot pod requires the k8s-chatbot AppArmor
+  profile, which the node loads at boot. Same k3s version as home.
+- The node is tainted and labelled (qwenops.io/burst=true, qwenops.io/cloud=aws), so only
+  burst pods run there.
+- ollama-burst (k8s/burst/10-ollama-burst.yaml): same image and model as home, model
+  downloaded on each start, same network rules (only chat-api may call it).
+- chat-api-burst (Helm, prod only, 2 pods, same image tag as prod): keeps the api label, so
+  the prod Service and Traefik spread chats across home and AWS pods. It connects to
+  Postgres with sslmode=verify-full against the local CA.
+- Images: while the tunnel is up, a read-only copy of the home registry listens on the
+  tunnel address only (started and stopped by wg0). Nothing can be pushed through it.
+- Join: a one-hour k3s bootstrap token, made per bring-up, deleted on burst-down.
+- AWS side: own VPC, WireGuard from the home IP only, no SSH (SSM), IMDSv2 with hop limit 1
+  (pods can't read the node's AWS credentials), encrypted 30 GB disk.
+- burst-down turns the burst pods off, removes the node from the cluster, takes wg0 down and
+  runs terraform destroy.
+
+Already live (applied 9 November, no AWS cost):
+- PriorityClass qwenops-burst and separate "burst" quotas in chatbot-prod and ai. The home
+  quotas now count only pods without that class, so bursting never uses home quota.
+  Checked: prod's home quota still counts its 4 pods; the burst quotas start at 0.
+- Prometheus copies the node label into cloud="aws" on kubelet metrics, which the Capacity
+  page uses to split local from AWS. Checked: Capacity still shows local data, AWS "not
+  running".
+- scripts/06-deploy.sh turns chat-api-burst on for prod while a burst node is Ready, so a
+  pipeline deploy during a burst keeps the AWS pods on the new image. BURST=off forces it off.
+
+Checks:      terraform validate, helm lint and kubectl server dry runs pass.
+             burst-test will check: node Ready, labelled and tainted; ollama-burst and the
+             burst pods ready on it; their Postgres connections use TLS; a real answer from
+             the AWS model; nothing else on the node; burst quota in use; Capacity page shows
+             the node.
+Risks:       pod traffic between home and AWS rides flannel VXLAN inside WireGuard; the first
+             run will prove it. If the node can't join with the bootstrap token, the fallback
+             is a token from "sudo k3s token create".
+Status:      open. Waiting for make burst-prepare and make burst-up, run by hand (the tunnel
+             test showed an automated permission check blocks creating AWS resources).
+Still to do: nothing for the budget: done in update 5.
 
 3. Phase 5 tunnel test: Terraform and WireGuard
 
@@ -57,7 +163,9 @@ Fixes:       the t4g.nano ran out of memory installing the Postgres client, and 
              check needed a tool the node doesn't have. See Issue 21.
 How it ran:  the first tunnel-up was blocked by an automated permission check, so it was run by
              hand, with the sudo lines for wg0; the node was then finished over SSM.
-Next:        make tunnel-down (destroy everything in AWS), then Phase 6, burst compute.
+Torn down:   make tunnel-down the same day: AWS empty (instance terminated, VPC and IAM role
+             deleted), home wg0 down. Only the home WireGuard key is kept for reuse.
+Next:        Phase 6, burst compute (update 4).
 
 2. Phase 5 home side: Postgres TLS and tunnel rules
 

@@ -227,6 +227,53 @@ make db-restore ENV=dev STAMP=2026-11-05T1525Z   # replace one env's database (a
 - The job runs with the same restrictions as every pod (non-root, read-only filesystem, AppArmor) and may reach
   only Postgres. The backup files hold chat data and password hashes; keep downloaded copies private.
 
+## AWS: tunnel, burst compute and cost guardrails (Phases 5–6)
+
+AWS is used only when the home server needs more capacity, and everything in it is destroyed afterwards,
+except the cost guardrails (which cost nothing). Terraform and the AWS CLI use the profile `chatbot`
+(region `ap-south-1`). Steps that need root print a `sudo` line to run, unless sudo still remembers your password.
+Full details and test results: `docs/updates.txt`.
+
+**Postgres TLS (once, home side):**
+
+```bash
+make db-tls             # certificate from the local CA, TLS 1.3, pg_hba.conf rules for the tunnel; 9 checks
+```
+
+**Tunnel test (Phase 5).** A tiny AWS node; the home server dials out to it over WireGuard (`wg0`):
+
+```bash
+make tunnel-up          # create the AWS node + home wg0 config (run the sudo lines it prints)
+make tunnel-test        # 7 checks from AWS: TLS verify-full, refused logins, tunnel address kept
+make tunnel-status      # AWS node and wg0 state
+make tunnel-down        # wg0 down + destroy everything in AWS
+```
+
+**Burst compute (Phase 6).** A Spot c6a.xlarge (~$0.05/h) joins k3s and runs extra prod chat-api pods with
+their own Ollama. It destroys itself after 30 idle minutes or 6 hours:
+
+```bash
+make burst-prepare      # once, sudo: firewall rules on wg0 for the burst node
+make burst-up           # create the node + home wg0; if it prints sudo lines, run them, then: make burst-ready
+make burst-test         # node, pods, Postgres over TLS, a real model answer, Capacity page
+make burst-status       # AWS node, wg0 and the pods on the burst node
+make burst-down         # burst pods off, node removed, wg0 down, destroy everything in AWS
+```
+
+Run `make burst-down` also after the node ended on its own (idle, max lifetime or Spot reclaim), to tidy up.
+The tunnel test and burst compute share the tunnel addresses, so only one can be up at a time.
+
+**Cost guardrails (stay up, $0).** A $10/month budget: emails at 50%, 80% and when forecast to pass $10; at
+100% the Terraform user loses the right to create machines and a kill switch terminates every EC2 instance in
+every region. Billing data lags several hours, so it is a backstop, not an exact cap.
+
+```bash
+make guardrails-up      # create/update (alert email in terraform/guardrails/terraform.tfvars, gitignored)
+make guardrails-test    # kill switch dry run: what it would remove right now
+make guardrails-status  # spend this month, cut-off armed or fired, deny policy attached?
+make guardrails-reset   # after a cut-off: give the Terraform user its create rights back
+```
+
 ## Resource budget (16 GB / 4-core host)
 
 CPU is the tight resource here, not memory: the model generates on CPU, so Ollama may use 3 of the
