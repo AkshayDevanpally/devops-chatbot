@@ -18,7 +18,21 @@ function bubble(role, text = "") {
   return div;
 }
 
+function showcaseChat() {
+  const boot = document.getElementById("boot");
+  boot.querySelector("h2").textContent = "The live chat runs on a home server";
+  boot.querySelector(".note").textContent = "Messages go to a small Qwen model on a 4-core machine at home, which sleeps when nobody "
+    + "uses it and wakes when someone on the home network opens the site. This public copy has no way to reach it.";
+  boot.querySelector(".steps").hidden = true;
+  const p = document.createElement("p"); p.className = "note showcase-note";
+  const a1 = document.createElement("a"); a1.href = "/architecture/#request"; a1.textContent = "how a chat travels";
+  const a2 = document.createElement("a"); a2.href = "/architecture/#wake"; a2.textContent = "how the server wakes";
+  p.append("See ", a1, " and ", a2, ".");
+  boot.append(p);
+}
+
 async function boot() {
+  if (SHOWCASE) return showcaseChat();
   try { await api("/api/wake", { method: "POST" }); } catch { /* keep polling */ }
   for (let i = 0; i < 180; i++) {
     let state = "waking";

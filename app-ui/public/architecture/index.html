@@ -30,11 +30,11 @@
   <h1>QwenOps Architecture</h1>
   <p class="lede">Everything that runs today: the Raspberry Pi gateway in front of the home server, the k3s cluster and every service in it, the addresses and ports each piece uses, how a request travels, how the server sleeps and wakes, the delivery pipeline with its live page, backups, phone alerts, and the AWS capacity that exists only when it's needed.</p>
   <div class="pills">
-    <span class="pill live">● Live: phases 1–8</span>
+    <span class="pill live">● Live: phases 1–9</span>
     <span class="pill">qwen2.5:0.5b on CPU</span>
     <span class="pill">16 GB · 4 cores</span>
     <span class="pill">AWS on demand · $10 cap</span>
-    <span class="pill plan">○ Planned: phase 9</span>
+    <span class="pill">Public showcase on Netlify</span>
   </div>
   <nav class="toc" aria-label="Sections">
     <a href="#overview"><span>1</span>Overview map</a>
@@ -1458,8 +1458,8 @@
     <li class="done"><b>+</b>Cost guardrails ($10 budget, kill switch), off-site backups with a Pulse panel, phone alerts through ntfy, overload protection</li>
     <li class="done"><b>7</b>Sleep when idle and Wake-on-LAN through a Raspberry Pi gateway (no SQS needed); server-down alerts from the Pi</li>
     <li class="done"><b>8</b>Live Jenkins runs and logs on the Pipeline page; Be a Dev starts real <code>theme-deploy</code> runs on dev</li>
-    <li class="next"><b>9</b>Secrets from a secrets manager (cost per secret to check)</li>
-    <li class="next"><b>open</b>Image signing (cosign + admission check), alerts for crash-looping pods, a gigabit cable for the server</li>
+    <li class="done"><b>9</b>Public showcase on Netlify: a static copy built from GitHub on every push, with a snapshot of prod's dashboards; no request reaches the home server</li>
+    <li class="next"><b>next</b>Secrets from a secrets manager, image signing (cosign + admission check), alerts for crash-looping pods, a gigabit cable for the server; maybe a live chat for the public site through a tunnel</li>
   </ol>
 </section>
 

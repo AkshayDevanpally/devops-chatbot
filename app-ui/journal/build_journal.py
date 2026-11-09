@@ -38,6 +38,8 @@ REDACT = [
     (re.compile(r"\bSHA256:[A-Za-z0-9+/]{20,}={0,2}"), "‹fingerprint›"),
     (re.compile(r"(?:[0-9A-F]{2}:){15,}[0-9A-F]{2}"), "‹fingerprint›"),
     (re.compile(r"\b[\w.+-]+@(?!github\.com\b)[\w-]+\.[\w.-]+\b"), "‹email›"),
+    (re.compile(r"(?i)\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b"), "‹mac›"),
+    (re.compile(r"/home/[a-z_][a-z0-9_-]*"), "~"),
 ]
 
 

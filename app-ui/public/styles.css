@@ -54,6 +54,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 #boot { padding: 28px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
 #boot h2 { margin-top: 0; }
 .steps { display: flex; gap: 8px; flex-wrap: wrap; }
+.steps[hidden] { display: none; }
 .step { padding: 6px 12px; border-radius: 999px; font-size: 13px; border: 1px solid var(--line); color: var(--muted); }
 .step.done { border-color: var(--ok); color: var(--ok); }
 .step.now { border-color: var(--run); color: var(--run); animation: pulse 1.2s infinite; }
@@ -349,3 +350,12 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
   .j-entry, .j-chapter-head { opacity: 1; transform: none; }
   .j-sparks { display: none; }
 }
+
+/* public showcase (Netlify): one line under the header on every page */
+.showcase-bar { font-size: 13px; line-height: 1.5; color: var(--muted); padding: 8px 16px; border-bottom: 1px solid var(--line);
+  background: var(--panel); text-align: center; }
+.showcase-bar b { color: var(--text); }
+.showcase-bar a { color: var(--accent); }
+.showcase-note { margin-top: 14px; }
+.showcase-note a { color: var(--accent); }
+

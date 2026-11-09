@@ -290,6 +290,7 @@ function updateLive() {
   const el = $("live"), text = $("live-text");
   if (document.hidden) { el.className = "live"; text.textContent = "Paused while this tab is hidden"; return; }
   if (failed) { el.className = "live err"; text.textContent = "Can't reach the API, retrying…"; return; }
+  if (SHOWCASE) { el.className = "live"; text.textContent = `Snapshot from ${showcaseWhen()}`; return; }
   if (!lastAt) return;
   const secs = Math.round((Date.now() - lastAt) / 1000);
   el.className = "live on";

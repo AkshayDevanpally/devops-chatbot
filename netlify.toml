@@ -1,0 +1,43 @@
+# Phase 9: public showcase on Netlify. A static copy of the site with no backend: no request
+# reaches the home server. Netlify builds from GitHub on every push to master.
+# Local check: make showcase-preview
+
+[build]
+  command = "python3 -I scripts/netlify-build.py"
+  publish = "dist"
+
+[build.environment]
+  PYTHON_VERSION = "3.13"
+
+# The same security headers nginx sends at home (app-ui/nginx/default.conf), plus HSTS.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    Strict-Transport-Security = "max-age=31536000"
+
+[[headers]]
+  for = "/theme.json"
+  [headers.values]
+    Cache-Control = "no-store"
+
+[[headers]]
+  for = "/journal/journal.json"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/showcase/*"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+# Nothing serves /api here; answer clearly instead of with an HTML page.
+[[redirects]]
+  from = "/api/*"
+  to = "/showcase/no-api.json"
+  status = 404
+  force = true
