@@ -92,10 +92,13 @@ make deploy-qa    # promotes the SAME image tag
 make deploy-prod  # asks for confirmation
 ```
 
-Add hostnames (on the server; from another PC use the server's LAN IP instead of 127.0.0.1):
+Add hostnames on the server itself:
 ```bash
 echo "127.0.0.1 chatbot.local dev.chatbot.local qa.chatbot.local" | sudo tee -a /etc/hosts
 ```
+Other devices on the home network find the names through the Raspberry Pi gateway (see *Sleep and wake*),
+which announces them over mDNS. Don't add hosts-file entries pointing at the server on other PCs: they go around
+the Pi, so a sleeping server never wakes. If a device can't use mDNS, point the names at the Pi (192.168.1.104).
 Open https://dev.chatbot.local, https://qa.chatbot.local, https://chatbot.local — each shows its
 environment badge and its own theme colour.
 
@@ -131,7 +134,7 @@ GitHub (private) ◄─poll every 2 min── Jenkins controller (k3s, namespace
 4. **Connect the build agent**: `make jenkins-agent` (sudo). Installs Java, creates the `jenkins-agent`
    system user, a deploy-only kubeconfig, and a hardened systemd service.
 5. Open https://jenkins.chatbot.local (user `admin`, password from `make jenkins-password`).
-   Add `jenkins.chatbot.local` to the hosts file of the PC you open it from.
+   Other devices find `jenkins.chatbot.local` through the Pi gateway (or a hosts entry pointing at the Pi).
 
 Every push to `master` runs the pipeline within ~2 minutes: the same SHA-tagged image goes to dev and qa
 (each verified with `make verify`), then waits up to a day for someone to click **Ship it** for prod.
@@ -202,6 +205,47 @@ kubectl top pods -A                      # RAM/CPU per pod (metrics-server is bu
 kubectl -n chatbot-dev describe quota    # how full each environment is
 helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n chatbot-prod
 ```
+
+## Overload protection
+
+Each chat-api pod streams one reply at a time from the model and keeps a short line (dev and qa 2, prod 4,
+waiting up to 30 s). Waiting people see "you're in line"; when the line is full they get "Busy right now… try
+again" at once (HTTP 503) instead of a two-minute hang. Settings: `api.chat` in the Helm values. Priority classes
+put Postgres, Ollama and Prometheus first, prod second, and dev, qa and Jenkins last when memory runs short.
+The `ChatsTurnedAway` alert fires if more than 10% of prod chats get "busy". Details: update 8 in `docs/updates.txt`.
+
+## Sleep and wake (Phase 7)
+
+The server sleeps when nobody uses it and wakes when someone opens the site. A Raspberry Pi (always on, Wi-Fi,
+192.168.1.104) stands in front of it: it announces `chatbot.local` & co. on the network and passes everything
+through to the server; if the server is asleep it shows "Waking it up…", sends the Wake-on-LAN magic packet and
+reloads into the site once the server answers (about a minute).
+
+```bash
+make sleep-setup           # once, sudo: Wake-on-LAN on; sleep after 30 idle min; wake 07:50 IST for backups
+make sleep-status          # would it sleep now, and if not, why
+make sleep-now MINUTES=2   # sudo: sleep now and wake by itself after 2 min (without MINUTES: 07:50 IST or a visit)
+make stay-awake            # never sleep until: make allow-sleep
+make wol-test              # sudo: test each link (card setting, Wi-Fi -> cable delivery, a real wake by the Pi)
+
+make pi-gateway            # set up / update the Pi (PI=user@ip, default rasppi@192.168.1.104; Pi's sudo password)
+make pi-test               # 11 checks through the Pi
+make pi-simulate           # pretend the server sleeps: waking page, magic packet (Pi's sudo password)
+make pi-status
+make lan-share-ca          # sudo: serve the home CA for 10 min, to install on a phone or laptop
+```
+
+- **Idle** means 30 minutes with no app traffic (chats, Pulse, any `/api` call), no Jenkins build, no backup job, no
+  AWS burst node, no SSH session (VS Code Remote counts, so it never sleeps under you) and no stay-awake switch.
+  It stays awake 07:45–10:00 IST for the backup, restore test and off-site copy (times in `/etc/qwenops-sleep.conf`).
+- Before sleeping it sends a quiet ntfy note. A Wake-on-LAN phone app also works: MAC `f8:bc:12:89:34:5f`,
+  broadcast `192.168.1.255`, port 9.
+- **BIOS (Dell OptiPlex 3020, F2):** Wake on LAN = LAN Only, Deep Sleep Control = Disabled, Block Sleep off,
+  Auto On Time off; AC Recovery = Last Power State is a good idea.
+- **Needs:** fixed addresses for the server and the Pi (DHCP reservations; re-run `make pi-gateway` if they change),
+  and clients that resolve `.local` names (iPhone, Mac, Windows 10/11, Android 12+) and trust the home CA.
+- **While asleep nothing runs:** no alerts, no Jenkins builds (they run once it's awake). After waking, k3s needs
+  1–2 minutes before the site answers.
 
 ## Alerts to your phone (ntfy)
 
@@ -362,4 +406,5 @@ To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` 
 - **Ollama version:** pinned to `ollama/ollama:0.30.10`. Check https://github.com/ollama/ollama/releases and bump it in `k8s/platform/30-ollama.yaml` and `.env`.
 - **TLS:** done in Phase 3.4 with a local CA. HSTS is 1 day (`tls.hstsSeconds`); raise it once certificates come from a public CA (e.g. Let's Encrypt in AWS).
 - **Pipeline page** runs a demo build; its stations match the Jenkinsfile stages, and Phase 8 connects it to live Jenkins events. Image signing (cosign + an admission check) is a follow-up to the SBOM step. **Colour page** validates and rate-limits now; Phase 8 makes it trigger the `theme-deploy` job.
-- **Wake-on-LAN:** `/api/wake` is a stub locally; Phase 7 sends it to SQS for the Raspberry Pi relay.
+- **Wake-on-LAN (Phase 7, done):** the Raspberry Pi gateway answers `/api/wake` and `/api/status` while the server
+  sleeps and sends the magic packet on the home network; no AWS (SQS) part was needed. See *Sleep and wake*.

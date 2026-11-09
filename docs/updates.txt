@@ -10,7 +10,9 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
- 9   9 Nov 2026    Phone access on the home Wi-Fi (paused)             Open, script written, not run
+ 11  9 Nov 2026    Phase 7: Raspberry Pi gateway, wake on visit        Done, checks passed
+ 10  9 Nov 2026    Phase 7: sleep when idle, Wake-on-LAN, IST times    Done, checks passed
+ 9   9 Nov 2026    Phone access on the home Wi-Fi                      Done, passed via the Pi
  8   9 Nov 2026    Overload protection: busy fast, prod first          Done on dev, checks passed
  7   9 Nov 2026    Alerts to your phone through ntfy                   Done, checks passed
  6   9 Nov 2026    Backups: off-site S3 copy, Pulse panel, Back up now Done, checks passed
@@ -24,7 +26,91 @@ SUMMARY
 DETAILS
 -------
 
-9. Phone access on the home Wi-Fi (paused)
+11. Phase 7: Raspberry Pi gateway, wake on visit
+
+Date:        9 November 2026
+Commands:    make pi-gateway (install/update; asks the Pi's sudo password once), pi-test,
+             pi-simulate (Pi's sudo password), pi-status (scripts/18-pi-gateway.sh; Pi side
+             in pi/setup.sh, pi/gateway/waker.py, pi/gateway/waking.html; certificate in
+             k8s/edge/10-pi-gateway-tls.yaml)
+Why:         a sleeping server can't wake itself when someone visits, and the site lives on it.
+             An always-on Raspberry Pi stands in for it.
+Hardware:    Raspberry Pi 3 Model B+, Debian 13 (trixie) 64-bit, Wi-Fi, 192.168.1.104 (user rasppi).
+
+How it works:
+- The Pi announces chatbot.local, dev., qa. and jenkins.chatbot.local on the Wi-Fi (mDNS),
+  pointing at itself. This also fixed phone access (update 9).
+- nginx on the Pi passes every connection straight through to the server (TCP, TLS untouched:
+  the server's own certificates are used end to end).
+- If the server doesn't answer within 1 s (asleep), nginx falls back to a local "waking up"
+  site with its own certificate from the home CA (1 year, from cert-manager):
+    1. the page opening sends the magic packet (at most one per 10 s), and the page re-sends
+       every 20 s in case one was missed;
+    2. the page shows "The server was asleep. Waking it up..." with a progress bar;
+    3. it asks the Pi every 3 s; the Pi checks the server's /api/readyz over HTTPS against the
+       home CA (that endpoint doesn't count as activity, so the Pi never keeps the server awake);
+    4. on "ready" the page reloads and, on a fresh connection, gets the real site.
+- The chat page's own /api/wake and /api/status calls are answered by the Pi while the server
+  sleeps, so an already-open chat page waits correctly too. Other API calls get 503
+  "The server is waking up".
+- Security: the Pi's private key is only in /etc/qwenops-gateway (readable by nginx); the copy
+  used for the install is deleted right after. The waker runs as a DynamicUser with a read-only
+  system; the name announcer as system user qwenops (group netdev, no login).
+
+Tests:       make pi-test (11 checks): dev and prod through the Pi reach the server, TLS passes
+             through untouched, http redirects to https, the four names announced as the Pi,
+             nginx, waker and announcer running, waker sees the server as ready.
+             make pi-simulate (pass-through pointed at an unused address): waking page with a
+             trusted certificate, connection closed after each answer, http redirect,
+             /api/wake accepted, /api/status answers, API calls get 503, magic packet sent.
+             Real: the server woken from sleep by opening the site from an ntfy notification on
+             the phone, and from the Windows laptop; the site loaded by itself after waking.
+Fixed:       names not really announced (Issue 37), reload loop after waking (Issue 38),
+             Windows going around the Pi (Issue 39).
+Needs:       fixed addresses (DHCP reservations) for the server (192.168.1.101) and the Pi
+             (192.168.1.104); if they change, re-run make pi-gateway. Clients must find .local
+             names (iPhone, Mac, Windows 10/11, Android 12+) and trust the home CA
+             (make lan-share-ca); Windows hosts-file entries must point at the Pi or be removed.
+
+10. Phase 7: sleep when idle, Wake-on-LAN, IST times
+
+Date:        9 November 2026
+Commands:    make sleep-setup (sudo), sleep-status, sleep-now [MINUTES=n] (sudo), stay-awake,
+             allow-sleep, wol-test (sudo) (scripts/17-sleep.sh)
+Why:         save power when nobody is using the server.
+Hardware:    Dell OptiPlex 3020, Realtek network card (r8169), supports suspend to RAM (S3) and
+             a wake-up timer in its clock chip. BIOS: Wake on LAN = LAN Only, Deep Sleep
+             Control = Disabled, Block Sleep off, Auto On Time off (AC Recovery = Last Power
+             State recommended).
+
+How it works:
+- Wake-on-LAN (magic packet) is switched on in the card at boot and before every sleep.
+- Every 5 minutes an idle check decides. The server sleeps after 30 minutes with none of:
+  app traffic (chats, Pulse, any /api call except health probes), a Jenkins build, a backup
+  job, an AWS burst node, an SSH session (VS Code Remote counts), the stay-awake switch, or
+  the backup window.
+- All times are in IST (SLEEP_TZ=Asia/Kolkata in /etc/qwenops-sleep.conf). The backup jobs
+  run on UTC, so the server stays awake 07:45-10:00 IST and wakes itself at 07:50 IST for the
+  08:00 backup, the Sunday 09:00 restore test and the 09:45 off-site copy.
+- Before sleeping it sends a quiet ntfy note ("Server sleeping ... wakes itself at 07:50 IST").
+- It wakes by: the Pi gateway when someone opens the site (update 11), a Wake-on-LAN phone app
+  (MAC f8:bc:12:89:34:5f, broadcast 192.168.1.255, port 9), or its own timer.
+- make sleep-now MINUTES=2 sleeps and wakes itself after 2 minutes, for testing.
+- make wol-test tests each link: A the card's setting, B a packet from the Pi reaching the
+  server's cable while awake, C a real sleep woken by the Pi (7-minute fallback timer).
+
+Tests:       dry runs of the idle check: awake with reasons (SSH, app requests), "idle 0 of 30
+             min", and "sleeping; wakes itself at Tue 07:50 IST" after 31 idle minutes.
+             Timer wake: slept 19:47:51, back 19:49:49 IST (2 minutes). make wol-test:
+             A Wake-on: g, ACPI wake enabled; B magic packet from the Pi seen on enp2s0;
+             C woken by the Pi after 46 s (fallback 420 s).
+Fixed:       the broadcast address read as "100" (Issue 36); octal time comparison, dry-run
+             kubeconfig and draft paths (Issue 40).
+Limits:      while asleep nothing runs: no alerts, no Jenkins builds (they run once it is
+             awake), no backups outside the window. After waking, k3s needs 1-2 minutes before
+             the site answers. The network link runs at 100 Mb/s (Issue 41).
+
+9. Phone access on the home Wi-Fi
 
 Date:        9 November 2026
 Commands:    make lan-access (sudo, once), make lan-share-ca (sudo), make lan-status
@@ -36,7 +122,9 @@ Planned:     avahi announcing chatbot.local, dev., qa. and jenkins.chatbot.local
              interface only (re-announced if the server's address changes); ufw rules for
              80/443 and mDNS from the home subnet only; the public CA certificate served on the
              LAN for 10 minutes to install on the phone.
-Status:      open, paused at the owner's request. Not run, not tested. Issue 35.
+Status:      done another way. This plan was never run: the Raspberry Pi gateway (update 11)
+             announces the names and passes traffic to the server. The script was cut down to
+             make lan-share-ca (install the home CA on a phone or laptop). Issue 35.
 
 8. Overload protection: "busy" fast, prod first
 
@@ -48,6 +136,39 @@ Changed:     app-chat (ModelGate in main.py, config, 3 tests), app-ui/public/cha
              helm/chatbot (api.chat values, priorityClassName for prod API and UI),
              k8s/platform/10-quotas.yaml (priority classes), 30-ollama.yaml, 40-postgres.yaml,
              50-prometheus.yaml (platform priority, ChatsTurnedAway alert)
+
+How it works, step by step:
+- Think of each chat-api pod as a counter with one clerk (the "slot") and a few chairs (the
+  "line"). The clerk serves one person at a time: that is one reply streaming from the model.
+- 1. A chat arrives. If the clerk is busy AND every chair is taken, the pod answers at once:
+     "Busy right now ... Try again in a moment" (HTTP 503, Retry-After 15 s). Nothing else
+     runs: no database lookup, no model call. This takes about 0.2 s.
+- 2. Otherwise the reply stream opens. If the clerk is free, the reply starts right away.
+- 3. If the clerk is busy but a chair is free, the person sits down and the page shows
+     "Busy right now, you're in line (N ahead)...".
+- 4. When the clerk finishes a reply, the next person in line is served, and the "in line"
+     note is replaced by the reply's first words.
+- 5. If someone has waited 30 s and still isn't served, they get the same "busy, try again"
+     message, and their chair is freed.
+- 6. If someone closes the page while waiting or while their reply streams, their chair or
+     the clerk is freed at once for the next person (the slot is always given back).
+- Example on dev (1 clerk, 2 chairs), 6 chats sent at the same moment: the 1st streams at
+  once (5 s), the 2nd and 3rd wait and are answered (9 s and 15 s), the 4th, 5th and 6th get
+  "busy" in 0.2 s. Prod has 2-3 pods, each with 1 clerk and 4 chairs, so up to 3 replies
+  stream at once and up to 12 people can wait.
+- Why so few clerks: dev, qa and prod all talk to the same Ollama, which writes 2 replies at a
+  time on the home server's 4 cores. More clerks would only build a hidden queue inside Ollama,
+  where people wait up to 2 minutes with no message. The line makes that wait visible and short.
+- What you see when it happens: the Pulse page counts "busy" chats (chat_requests_total with
+  outcome="busy") and people waiting (chat_waiting); if over 10% of prod chats are turned away
+  for 5 minutes, the ChatsTurnedAway alert reaches your phone and suggests make burst-up.
+  A burst node adds its own Ollama and 2 more pods, each with its own clerk and chairs.
+- Under memory pressure (the other half of this update): the kubelet evicts lower-priority pods
+  first, so dev, qa and Jenkins go before prod, and prod goes before Postgres, Ollama and
+  Prometheus. Once the pressure is gone, the evicted pods are started again by their
+  Deployments.
+- Settings: helm values api.chat (slots, queue, waitSeconds), per environment. Changing them
+  is a normal deploy; no code change.
 
 Fail fast (chat-api, per pod):
 - 1 reply streamed at a time per pod, a line of 2 (dev, qa) or 4 (prod), 30 s wait at most.

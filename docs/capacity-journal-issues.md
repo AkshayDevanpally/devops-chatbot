@@ -19,7 +19,10 @@ Problems hit on 4–5 November 2026:
 - Issues 28–30 (9 November): off-site backups and the Pulse backups panel.
 - Issues 31–32 (9 November): phone alerts through ntfy.
 - Issues 33–34 (9 November): overload protection and its load test.
-- Issue 35 (9 November): the Pulse page doesn't open on a phone on the home Wi-Fi (open).
+- Issue 35 (9 November): the Pulse page didn't open on a phone on the home Wi-Fi (fixed by the Pi gateway).
+- Issues 36–41 (9 November): Phase 7, sleep and Wake-on-LAN with a Raspberry Pi gateway: a wrong broadcast
+  address, names that weren't really announced, a reload loop after waking, Windows going around the Pi, and
+  slips in the new scripts.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -57,7 +60,13 @@ Problems hit on 4–5 November 2026:
 | 32 | ChatApiDown showed "pending" right after Prometheus restarted | Alerts | False alarm |
 | 33 | Load test: people about to be turned away first saw "you're in line" | App / overload | Fixed |
 | 34 | Load retests misled: same `-dirty` image tag reused, and an old pod still serving | Process / testing | Fixed |
-| 35 | Pulse page doesn't open on a phone on the home Wi-Fi | Network | Open (fix scripted, not applied) |
+| 35 | Pulse page doesn't open on a phone on the home Wi-Fi | Network | Fixed (Raspberry Pi gateway, Issues 37–40) |
+| 36 | First sleep test: nothing woke the server; the wake packet went to address "100" | Scripts / Wake-on-LAN | Fixed |
+| 37 | Wake test 2 failed: the Pi said it announced chatbot.local, but nothing was announced | Pi / mDNS | Fixed |
+| 38 | After waking, the "waking up" page reloaded itself forever instead of showing the site | Pi / nginx | Fixed |
+| 39 | Windows didn't wake the server: it went to the server's address directly, around the Pi | Client / DNS | Fixed |
+| 40 | Mistakes in the new sleep and Pi scripts, caught before they ran | Process | Fixed |
+| 41 | The server's network link runs at 100 Mb/s instead of 1 Gb/s | Hardware | Noted |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -866,7 +875,8 @@ a test result. `-dirty` tags are not unique: pass `TAG=` for every manual rebuil
 
 ### Issue 35 — Pulse page doesn't open on a phone on the home Wi-Fi
 
-**Date:** 9 November 2026. **Status: open** (fix written, not applied; paused at the owner's request).
+**Date:** 9 November 2026. **Status: fixed** later the same day by the Raspberry Pi gateway (Phase 7), which
+announces the names on the Wi-Fi; see the update at the end of this entry.
 
 **Symptom:** on a phone connected to the home Wi-Fi, `https://chatbot.local/pulse/` doesn't open.
 
@@ -881,3 +891,183 @@ four names with the current LAN address (re-announced if it changes), and ufw ru
 from the home subnet only. `make lan-share-ca` serves only the public CA certificate on the LAN for 10 minutes for
 the phone to install. Not yet run or tested on a phone; the error the phone shows will confirm which part was
 missing.
+
+**Update (fixed):** this plan was never run. Phase 7 put a Raspberry Pi in front of the server, and the Pi now
+announces the four names (pointing at itself) and passes traffic through to the server. Announcing them from the
+server as well would clash, so `scripts/16-lan-access.sh` was cut down to `share-ca` only (`make lan-share-ca`,
+to install the home CA on a phone or laptop). The phone then opened the site through the Pi, including from an
+ntfy notification while the server was asleep. Getting there took Issues 37–39.
+
+### Issue 36 — First sleep test: nothing woke the server; the wake packet went to address "100"
+
+**Date:** 9 November 2026, first `make sleep-now` (Phase 7).
+
+**Symptom:** the server went to sleep, and the owner couldn't wake it with the Wake-on-LAN app or the site.
+The server's log:
+
+```text
+19:40:17 IST systemd-sleep: Performing sleep operation 'suspend'...
+19:42:58 IST systemd-sleep: System returned from sleep operation 'suspend'.
+19:42:58 IST qwenops-sleep: woke up
+```
+
+The kernel log can't say what woke it at 19:42:58 (`/sys/power/pm_wakeup_irq: No data available`); it wasn't
+the Pi, whose log had no packet in that window.
+
+**Cause:** a mistake in both new scripts. The broadcast address was read with `awk '/brd/{print $4}'` from
+`ip -4 addr show`, assuming the address comes in column 4. On this server the line reads:
+
+```text
+inet 192.168.1.101/24 metric 100 brd 192.168.1.255 scope global dynamic enp2s0
+```
+
+so column 4 is `100` ("metric 100" comes first). The Pi's waker started with it, and `make sleep-setup` printed
+it as the app setting:
+
+```text
+{"event": "start", "server": "192.168.1.101", "mac": "f8:bc:12:89:34:5f", "broadcast": "100"}
+```
+
+**Fix:** both scripts take the word after `brd`, wherever it is
+(`ip -o -4 addr show dev "$IFACE" | awk '{for (i = 1; i < NF; i++) if ($i == "brd") print $(i+1)}'`), which gives
+`192.168.1.255`. After `make pi-gateway` the waker logged `"broadcast": "192.168.1.255"`. The same round made the
+times IST (asked for by the owner) and added `make sleep-now MINUTES=2`, which wakes by the clock: that test
+slept at 19:47:51 and came back at 19:49:49 IST, exactly on time.
+
+**Lesson:** never pick a field by column number from `ip` output: optional words like `metric` move the columns.
+Look for the keyword.
+
+### Issue 37 — Wake test 2 failed: the Pi said it announced chatbot.local, but nothing was announced
+
+**Date:** 9 November 2026, `make sleep-now MINUTES=15`, then opening the site from a phone and the laptop.
+
+**Symptom:** the server slept the full 15 minutes and came back on the clock, not on a wake packet:
+
+```text
+19:53:29 IST systemd-sleep: Performing sleep operation 'suspend'...
+20:08:27 IST systemd-sleep: System returned from sleep operation 'suspend'.
+```
+
+**Finding the cause, link by link.** `make wol-test` was written to test each link on its own, with the Pi
+sending the packets on a timer:
+
+```text
+== A. network card
+   Supports Wake-on: pumbg
+   Wake-on: g
+   ACPI wake for the card: *enabled
+== B. delivery while awake (Pi on Wi-Fi -> server on cable)
+   PASS  magic packet seen on enp2s0: 14:50:16.157623 IP 192.168.1.104.56758 > 255.255.255.255.9: UDP, length 102
+== C. real wake: Pi sends at +45, +75, +105, +135 s; fallback timer 7 min
+   awake again after 46 s
+   PASS  woken by Wake-on-LAN after 46 s (the fallback was 420 s)
+```
+
+So Wake-on-LAN worked. The Pi's log had **no request at all** during test 2: the visits never reached the Pi.
+`make pi-test` showed why:
+
+```text
+FAIL  chatbot.local not announced as 192.168.1.104
+FAIL  dev.chatbot.local not announced as 192.168.1.104
+PASS  qwenops-mdns running on the Pi
+```
+
+and on the Pi:
+
+```text
+announcing chatbot.local dev.chatbot.local qa.chatbot.local jenkins.chatbot.local -> 192.168.1.104
+$ pgrep -a avahi-publish          (nothing)
+$ avahi-resolve -4 -n chatbot.local
+Failed to resolve host name 'chatbot.local': Timeout reached
+```
+
+**Cause:** a mistake in `pi/setup.sh`. The announcer ran as a systemd `DynamicUser`, and its `avahi-publish`
+processes died at once, but their errors went to `/dev/null` and the loop kept saying "announcing". Run by hand
+as the Pi's normal user (member of `netdev`), the same command worked:
+`Established under name 'dev.chatbot.local'`. Most likely the system bus couldn't resolve the throwaway user (the
+avahi policy itself only denies `SetHostName`); it couldn't be confirmed without sudo on the Pi.
+
+**Fix:** the announcer runs as a fixed system user `qwenops` (no login, group `netdev`). Its errors go to the
+journal, and it exits (systemd restarts it) if any announcement stops or the address changes, so it can't claim
+to announce while nothing runs. After `make pi-gateway`, all four names resolved to the Pi.
+
+**Lesson:** a "running" service isn't a working one. Check the outcome (here: does the name resolve from another
+device?), and never send a child process's errors to `/dev/null` in a loop that reports success.
+
+### Issue 38 — After waking, the "waking up" page reloaded itself forever instead of showing the site
+
+**Date:** 9 November 2026, first full test from a phone (opened from an ntfy notification while asleep).
+
+**Symptom:** the page showed "The server was asleep. Waking it up…", the server woke, but the site never
+appeared: the waking page stayed. The Pi's log showed a new "page opened" every ~10 s:
+
+```text
+{"ts": "2026-11-09T15:04:31+00:00", "event": "magic_packet_sent", "reason": "page opened"}
+{"ts": "2026-11-09T15:04:42+00:00", "event": "magic_packet_sent", "reason": "page opened"}
+{"ts": "2026-11-09T15:04:52+00:00", "event": "magic_packet_sent", "reason": "page opened"}
+```
+
+and the waker answered `{"state": "ready"}`: it saw the server as up.
+
+**Cause:** the Pi's nginx passes each TCP connection either to the server or, if the server doesn't answer, to the
+local waking site. That choice is made once per connection. The browser kept its connection open (keep-alive)
+and reused it for the reload, so the reload landed on the waking site again, which said "ready", which reloaded…
+
+**Fix:** the waking site closes the connection after every answer (`keepalive_timeout 0`), so the reload opens a
+new connection, which the pass-through sends to the server once it's up. `make pi-simulate` now also checks that
+the waking page answers with `Connection: close`. Retest: the site loaded by itself a few seconds after waking.
+
+**Lesson:** with a TCP (layer 4) proxy, everything on one connection goes to the same place. A fallback page
+that must later hand over has to close its connections.
+
+### Issue 39 — Windows didn't wake the server: it went to the server's address directly, around the Pi
+
+**Date:** 9 November 2026, same test, from the Windows laptop.
+
+**Symptom:** with the server asleep, opening `https://chatbot.local` on Windows didn't wake it, while the phone
+(through the ntfy notification) did. The Pi logged no request from the laptop.
+
+**Cause:** Windows didn't ask the Pi. The check was `ping -4 -n 1 chatbot.local`: if it answers with the server's
+address (192.168.1.101), Windows is using a hosts-file entry (the README once said to add `jenkins.chatbot.local`
+to the PC's hosts file) or a cached answer, so it goes straight to the sleeping server, which can't answer, and
+the Pi never sees the visit. The phone has no hosts file and finds the names through the Pi's announcement.
+
+**Fix:** on Windows, the four names in `C:\Windows\System32\drivers\etc\hosts` point at the Pi
+(192.168.1.104) or are removed, then `ipconfig /flushdns` and a full browser restart (browsers keep connections
+to the old address). After that the laptop woke the server too.
+
+**Lesson:** a gateway only works if every client actually goes through it. Old hosts entries and DNS caches send
+clients around it, silently. The README's hosts tip now points at the Pi.
+
+### Issue 40 — Mistakes in the new sleep and Pi scripts, caught before they ran
+
+**Date:** 9 November 2026, writing `scripts/17-sleep.sh`, `pi/setup.sh` and `scripts/18-pi-gateway.sh`.
+
+**What happened:**
+1. **Times read as octal.** The backup-window check compared `HHMM` with `[[ $hm -ge 0215 ]]`; bash reads numbers
+   with a leading zero as octal, and `08`/`09` aren't valid octal. Caught when reviewing the dry run; now
+   `(( 10#$hm >= 10#$from ))`.
+2. **The dry run lost its kubeconfig.** The idle check unset `KUBECONFIG` for non-root users, so the dry run said
+   `Kubernetes not answering`. Now only root sets it (to k3s's own file); users keep theirs.
+3. **A real Jenkins fetch looked like a false alarm.** The dry run said `Jenkins build running`; `ps -u jenkins-agent`
+   showed a `git fetch` of the repo, a poll that lasts a second or two. Correct behaviour, noted.
+4. **Broken paths in the first draft of `18-pi-gateway.sh`.** The `simulate` and `remove` lines pointed at files that
+   didn't exist; caught on review. The Pi setup now keeps a root-owned copy of itself (without the key) in
+   `/opt/qwenops-gateway-setup` for later runs.
+5. **The phone-access plan would have clashed with the Pi.** `scripts/16-lan-access.sh` (Issue 35) announced the same
+   names from the server. It was never run; it now only serves the CA certificate.
+
+**Lesson:** dry-run every new script against the real system before handing it over, and re-check earlier plans
+when the design changes.
+
+### Issue 41 — The server's network link runs at 100 Mb/s instead of 1 Gb/s
+
+**Date:** 9 November 2026, noticed while checking Wake-on-LAN support.
+
+**Finding:** `ethtool enp2s0` reports `Speed: 100Mb/s`, and after every wake the kernel logs
+`enp2s0: Link is Up - 100Mbps/Full`. The card (Realtek, r8169) does gigabit.
+
+**Likely cause:** a worn or 4-wire cable, or a 100 Mb/s port on the router. Not urgent: chat traffic is small, and
+Wake-on-LAN works at any speed (cards often drop to 100 Mb/s while asleep anyway).
+
+**Next step:** try another (Cat5e or better) cable or router port and check `ethtool enp2s0 | grep Speed`.
