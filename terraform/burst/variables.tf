@@ -3,10 +3,13 @@ variable "region" {
   default = "ap-south-1"
 }
 
-variable "instance_type" {
-  description = "amd64 only: the images in the home registry are built for amd64."
-  type        = string
-  default     = "c6a.xlarge" # 4 vCPU / 8 GB
+variable "instance_types" {
+  description = "Allowed types, all amd64 (home registry images are amd64), 4 vCPU, 8-16 GB."
+  type        = list(string)
+  default = [
+    "c6a.xlarge", "m6a.xlarge", "c5a.xlarge", "m5a.xlarge", "m5.xlarge",
+    "c5.xlarge", "c7i.xlarge", "m6i.xlarge", "c6i.xlarge", "m7i.xlarge",
+  ]
 }
 
 variable "spot" {

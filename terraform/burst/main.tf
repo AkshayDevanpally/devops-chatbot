@@ -20,12 +20,14 @@ resource "aws_internet_gateway" "this" {
   tags   = { Name = "qwenops-burst" }
 }
 
+# One public subnet per zone, so the fleet can take Spot capacity wherever it is.
 resource "aws_subnet" "public" {
+  count                   = length(data.aws_availability_zones.up.names)
   vpc_id                  = aws_vpc.this.id
-  cidr_block              = "10.100.1.0/24"
-  availability_zone       = data.aws_availability_zones.up.names[0]
+  cidr_block              = "10.100.${count.index + 1}.0/24"
+  availability_zone       = data.aws_availability_zones.up.names[count.index]
   map_public_ip_on_launch = true
-  tags                    = { Name = "qwenops-burst-public" }
+  tags                    = { Name = "qwenops-burst-public-${count.index + 1}" }
 }
 
 resource "aws_route_table" "public" {
@@ -38,7 +40,8 @@ resource "aws_route_table" "public" {
 }
 
 resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
+  count          = length(aws_subnet.public)
+  subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
 }
 
@@ -95,39 +98,31 @@ resource "aws_iam_instance_profile" "node" {
   role = aws_iam_role.node.name
 }
 
-resource "aws_instance" "node" {
-  ami                    = data.aws_ssm_parameter.ubuntu.value
-  instance_type          = var.instance_type
-  subnet_id              = aws_subnet.public.id
+resource "aws_launch_template" "node" {
+  name_prefix            = "qwenops-burst-"
+  image_id               = data.aws_ssm_parameter.ubuntu.value
   vpc_security_group_ids = [aws_security_group.node.id]
-  iam_instance_profile   = aws_iam_instance_profile.node.name
+  iam_instance_profile { name = aws_iam_instance_profile.node.name }
 
-  # "shutdown" from the idle and max-lifetime timers terminates the instance (stops billing).
-  instance_initiated_shutdown_behavior = "terminate"
-
-  dynamic "instance_market_options" {
-    for_each = var.spot ? [1] : []
-    content {
-      market_type = "spot"
-      spot_options {
-        spot_instance_type             = "one-time"
-        instance_interruption_behavior = "terminate"
-      }
-    }
-  }
+  # "shutdown" from the idle and max-lifetime timers must terminate the instance (stops billing).
+  # Spot instances from an instant fleet already terminate on shutdown, and AWS refuses the
+  # attribute for Spot ("not supported for spot instances"), so set it only for on-demand.
+  instance_initiated_shutdown_behavior = var.spot ? null : "terminate"
 
   metadata_options {
     http_tokens                 = "required" # IMDSv2 only
     http_put_response_hop_limit = 1          # pods can't reach the instance's credentials
   }
-  root_block_device {
-    volume_type = "gp3"
-    volume_size = 30 # Ollama image (~4 GB) + k3s images + model
-    encrypted   = true
+  block_device_mappings {
+    device_name = "/dev/sda1"
+    ebs {
+      volume_type = "gp3"
+      volume_size = 30 # Ollama image (~4 GB) + k3s images + model
+      encrypted   = true
+    }
   }
 
-  user_data_replace_on_change = true
-  user_data = templatefile("${path.module}/user-data.sh.tftpl", {
+  user_data = base64encode(templatefile("${path.module}/user-data.sh.tftpl", {
     aws_private_key  = var.aws_private_key
     home_public_key  = var.home_public_key
     home_lan_ip      = var.home_lan_ip
@@ -137,7 +132,72 @@ resource "aws_instance" "node" {
     idle_minutes     = var.idle_minutes
     idle_checks      = ceil(var.idle_minutes / 5)
     max_minutes      = var.max_hours * 60
-  })
+  }))
+
+  tag_specifications {
+    resource_type = "instance"
+    tags          = { Name = "qwenops-burst", Project = "qwenops", Stack = "burst", Ephemeral = "true" }
+  }
+  tag_specifications {
+    resource_type = "volume"
+    tags          = { Name = "qwenops-burst", Project = "qwenops", Stack = "burst", Ephemeral = "true" }
+  }
+}
+
+# One machine, from whichever allowed type and zone has Spot capacity (the first run lost a single
+# c6a.xlarge in one zone to "no Spot capacity" after 7 minutes). "instant": AWS launches once and
+# reports the instance; destroying the fleet terminates it.
+resource "aws_ec2_fleet" "node" {
+  type                                = "instant"
+  terminate_instances                 = true
+  terminate_instances_with_expiration = false
+
+  launch_template_config {
+    launch_template_specification {
+      launch_template_id = aws_launch_template.node.id
+      version            = aws_launch_template.node.latest_version
+    }
+    dynamic "override" {
+      for_each = setproduct(var.instance_types, aws_subnet.public[*].id)
+      content {
+        instance_type = override.value[0]
+        subnet_id     = override.value[1]
+      }
+    }
+  }
+
+  target_capacity_specification {
+    default_target_capacity_type = var.spot ? "spot" : "on-demand"
+    total_target_capacity        = 1
+  }
+  # The provider always sends a minimum target capacity (0 when unset). AWS accepts one only from a
+  # "single instance type" (or single-zone) fleet, and only if it is at least 1; dry runs check
+  # neither. With a target of 1 machine both settings change nothing: "one machine or none", still
+  # picked from all types and zones.
+  dynamic "spot_options" {
+    for_each = var.spot ? [1] : []
+    content {
+      allocation_strategy  = "price-capacity-optimized"
+      single_instance_type = true
+      min_target_capacity  = 1
+    }
+  }
+  dynamic "on_demand_options" {
+    for_each = var.spot ? [] : [1]
+    content {
+      allocation_strategy  = "lowestPrice"
+      single_instance_type = true
+      min_target_capacity  = 1
+    }
+  }
 
   tags = { Name = "qwenops-burst" }
+}
+
+locals {
+  instance_id = one(flatten(aws_ec2_fleet.node.fleet_instance_set[*].instance_ids))
+}
+
+data "aws_instance" "node" {
+  instance_id = local.instance_id
 }

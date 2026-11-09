@@ -25,6 +25,17 @@ root() {  # run as root if sudo works without a prompt, otherwise print the comm
 }
 tf_out() { $TF output -raw "$1" 2>/dev/null || true; }
 wg_up() { ip link show wg0 >/dev/null 2>&1; }
+# Read-only copy of the image registry, only on the tunnel address, only while the tunnel is up.
+# Started here, not from wg0's PostUp: Ubuntu's AppArmor profile for wg-quick may not run docker.
+registry_up() {
+  docker ps --format '{{.Names}}' | grep -qx registry-tunnel && return 0
+  docker run -d --rm --name registry-tunnel -p 10.200.0.1:5000:5000 \
+    -v registry-data:/var/lib/registry:ro \
+    -v "$PWD/k8s/burst/registry-readonly.yml:/etc/docker/registry/config.yml:ro" \
+    --security-opt no-new-privileges:true registry:2 >/dev/null
+  echo "    read-only registry on 10.200.0.1:5000"
+}
+registry_down() { docker rm -f registry-tunnel >/dev/null 2>&1 || true; }
 
 prepare() {
   [[ $EUID -eq 0 ]] || { echo "run with sudo"; exit 1; }
@@ -61,8 +72,10 @@ up() {
   [ -s "$DIR/home.key" ] || wg genkey > "$DIR/home.key"
   wg pubkey < "$DIR/home.key" > "$DIR/home.pub"
   wg genkey > "$DIR/burst.key"; wg pubkey < "$DIR/burst.key" > "$DIR/burst.pub"
-  id=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 6)
-  secret=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 16)
+  # Bootstrap token format: 6 + 16 characters of [a-z0-9]; hex fits. (Not `tr </dev/urandom | head`:
+  # head closing the pipe kills tr with SIGPIPE, which pipefail turns into exit 141.)
+  id=$(openssl rand -hex 3)
+  secret=$(openssl rand -hex 8)
   kubectl -n kube-system create secret generic "bootstrap-token-$id" --type bootstrap.kubernetes.io/token \
     --from-literal=token-id="$id" --from-literal=token-secret="$secret" \
     --from-literal=expiration="$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)" \
@@ -93,12 +106,9 @@ up() {
 [Interface]
 Address = 10.200.0.1/24
 PrivateKey = $(cat "$DIR/home.key")
-# Read-only copy of the image registry, only on the tunnel address, only while the tunnel is up.
-PostUp = docker run -d --rm --name registry-tunnel -p 10.200.0.1:5000:5000 -v registry-data:/var/lib/registry:ro -v $PWD/k8s/burst/registry-readonly.yml:/etc/docker/registry/config.yml:ro --security-opt no-new-privileges:true registry:2
-PreDown = docker rm -f registry-tunnel
 
 [Peer]
-# AWS burst node $(tf_out instance_id) ($(tf_out market))
+# AWS burst node $(tf_out instance_id), $(tf_out instance_type) $(tf_out market) in $(tf_out zone)
 PublicKey = $(cat "$DIR/burst.pub")
 Endpoint = $ip:51820
 AllowedIPs = 10.200.0.2/32
@@ -118,6 +128,7 @@ CONF
 
 ready() {
   wg_up || { echo "wg0 is not up: run the sudo lines from 'up' first"; exit 1; }
+  registry_up
   echo "==> waiting for the AWS node to join (first boot installs k3s: a few minutes)"
   for i in $(seq 90); do
     kubectl get node "$NODE" >/dev/null 2>&1 && break
@@ -142,6 +153,17 @@ ready() {
 test_burst() {
   fail=0
   check() { if [ "$2" = "$3" ]; then echo "PASS  $1"; else echo "FAIL  $1 (got '$2', want '$3')"; fail=1; fi; }
+  # First: is the machine still there? (Spot can be taken back; the node then stays "Ready" for ~40 s.)
+  id=$(tf_out instance_id)
+  state=$( [ -n "$id" ] && aws ec2 describe-instances --instance-ids "$id" \
+           --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo none)
+  if [ "$state" != running ]; then
+    reason=$(aws ec2 describe-instances --instance-ids "$id" --query 'Reservations[0].Instances[0].StateReason.Message' \
+             --output text 2>/dev/null || true)
+    echo "FAIL  AWS machine is not running (${state:-none}${reason:+: $reason}): run 'make burst-down', then 'make burst-up'"
+    exit 1
+  fi
+  echo "PASS  AWS machine running ($id, $(tf_out instance_type) $(tf_out market) in $(tf_out zone))"
   ready_status=$(kubectl get node "$NODE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
   check "AWS node joined and Ready" "$ready_status" True
   check "node labelled cloud=aws" "$(kubectl get node "$NODE" -o jsonpath='{.metadata.labels.qwenops\.io/cloud}' 2>/dev/null)" aws
@@ -157,7 +179,7 @@ test_burst() {
   # Postgres sees the burst pods' connections, over TLS.
   ips=$(kubectl -n chatbot-prod get pods -l chatbot.io/pool=burst -o jsonpath='{.items[*].status.podIP}' | tr ' ' ',')
   q="select count(*) filter (where s.ssl), count(*) from pg_stat_activity a join pg_stat_ssl s using (pid)
-     where a.client_addr::text = any(string_to_array('$ips', ','))"
+     where host(a.client_addr) = any(string_to_array('$ips', ','))"
   res=$(kubectl -n data exec postgres-0 -c postgres -- psql -U postgres -Atc "$q" 2>/dev/null || echo "0|0")
   tls=${res%%|*}; all=${res##*|}
   if [ "${all:-0}" -gt 0 ] && [ "$tls" = "$all" ]; then echo "PASS  burst pods use Postgres at home over TLS ($all connections)"
@@ -215,6 +237,7 @@ down() {
   kubectl -n kube-system delete secret -l qwenops.io/burst=true --ignore-not-found >/dev/null   # join tokens
 
   echo "==> home wg0 down"
+  registry_down
   if wg_up; then root wg-quick down wg0; fi
   root rm -f "$WG_CONF"
 
@@ -234,7 +257,7 @@ status() {
   id=$(tf_out instance_id)
   if [ -n "$id" ]; then
     state=$(aws ec2 describe-instances --instance-ids "$id" --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "?")
-    echo "AWS node: $id $(tf_out public_ip) $(tf_out market), $state"
+    echo "AWS node: $id $(tf_out instance_type) in $(tf_out zone), $(tf_out public_ip), $(tf_out market), $state"
   else echo "AWS node: none"; fi
   if wg_up; then echo "home wg0: up"; else echo "home wg0: down"; fi
   kubectl get node "$NODE" -o wide 2>/dev/null || echo "k8s node $NODE: not in the cluster"

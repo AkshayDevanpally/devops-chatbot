@@ -1,5 +1,5 @@
 # Read-only copy of the home image registry for the AWS burst node (Phase 6).
-# Started by wg0's PostUp (scripts/13-burst.sh) and listens only on the tunnel address
+# Started by scripts/13-burst.sh once wg0 is up, and listens only on the tunnel address
 # 10.200.0.1:5000, sharing the registry-data volume read-only. Nothing can be pushed through it.
 version: 0.1
 log:
