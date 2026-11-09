@@ -15,6 +15,8 @@ ollamaUrl: http://ollama.ai.svc.cluster.local:11434
 prometheusUrl: http://prometheus.monitoring.svc.cluster.local:9090
 # Backup status, logs and "Back up now" for Pulse (k8s/platform/65-backup-ops.yaml). "" hides it.
 backupOpsUrl: http://backup-ops.data.svc.cluster.local:8080
+# Live Jenkins builds for the Pipeline page and "Be a Dev" (k8s/ci/30-pipeline-events.yaml). "" = demo only.
+pipelineEventsUrl: http://pipeline-events.ci.svc.cluster.local:8080
 cookieSecure: true           # uid cookie only sent over HTTPS (needs tls.enabled)
 
 # Secret created by scripts/05-secrets.sh (later: External Secrets Operator).

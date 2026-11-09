@@ -12,12 +12,31 @@
     <nav><a href="/">Chat</a><a href="/pipeline/">Pipeline</a><a href="/dev/">Be a Dev</a><a href="/pulse/">Pulse</a><a href="/capacity/">Capacity</a><a href="/journal/">Journal</a><a href="/architecture/">Architecture</a></nav>
     <div class="env">local</div>
   </header>
-  <main>
-    <h2>CI/CD factory</h2>
-    <p class="note" id="mode">Demo mode: a simulated build. Live Jenkins events connect in Phase 8.</p>
+  <main class="wide">
+    <div class="pulse-head">
+      <div>
+        <h2>CI/CD factory</h2>
+        <p class="note" id="mode">Connecting to Jenkins…</p>
+      </div>
+      <div class="pulse-controls">
+        <div class="seg" role="group" aria-label="Which pipeline" id="jobs" hidden>
+          <button type="button" data-job="chatbot">Delivery pipeline</button>
+          <button type="button" data-job="theme-deploy">Colour deploys</button>
+        </div>
+        <div class="live" id="live" aria-live="polite"><i></i><span id="live-text"></span></div>
+      </div>
+    </div>
+
+    <div class="runs" id="runs" aria-label="Recent runs"></div>
+    <section class="run-head" id="run-head" hidden>
+      <div class="run-title"><b id="run-name"></b> <span id="run-badge"></span></div>
+      <div class="run-meta" id="run-meta"></div>
+      <div class="waiting" id="waiting" hidden></div>
+    </section>
+
     <div class="belt"><div class="box" id="box"></div></div>
     <div class="factory" id="factory"></div>
-    <button id="run">Run demo build</button>
+    <button id="run" hidden>Run demo build</button>
     <div id="drawer">
       <div class="bar"><span id="drawer-title">Logs</span><span id="drawer-close" class="link">close</span></div>
       <pre id="drawer-log"></pre>

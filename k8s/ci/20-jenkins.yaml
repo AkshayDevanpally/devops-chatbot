@@ -34,9 +34,19 @@ data:
           users:
             - id: admin
               password: "${admin-password}"
+            # Used by pipeline-events (Pipeline page, "Be a Dev"): may read builds and start jobs, nothing else.
+            # It can't approve prod: the Jenkinsfile's input step allows only admin to submit.
+            - id: pipeline-viewer
+              password: "${pipeline-viewer-password}"
       authorizationStrategy:
-        loggedInUsersCanDoAnything:
-          allowAnonymousRead: false
+        globalMatrix:
+          entries:
+            - user:
+                name: admin
+                permissions: [Overall/Administer]
+            - user:
+                name: pipeline-viewer
+                permissions: [Overall/Read, Job/Read, Job/Build]
       nodes:
         - permanent:
             name: host-agent
@@ -96,6 +106,29 @@ data:
                   }
                 }
                 scriptPath('Jenkinsfile')
+                lightweight(true)
+              }
+            }
+          }
+          pipelineJob('theme-deploy') {
+            description('"Be a Dev": deploy a new colour to dev (started from the site). Pipeline: ci/theme-deploy.Jenkinsfile.')
+            logRotator { numToKeep(20) }
+            parameters {
+              choiceParam('COLOR', ['teal', 'indigo', 'rose', 'amber', 'emerald', 'slate'], 'New colour for dev')
+            }
+            properties { disableConcurrentBuilds() }
+            definition {
+              cpsScm {
+                scm {
+                  git {
+                    remote {
+                      url('${GIT_REPO_URL}')
+                      credentials('github-deploy-key')
+                    }
+                    branch('*/${GIT_BRANCH}')
+                  }
+                }
+                scriptPath('ci/theme-deploy.Jenkinsfile')
                 lightweight(true)
               }
             }
@@ -221,6 +254,10 @@ spec:
     - from:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
           podSelector: { matchLabels: { app.kubernetes.io/name: traefik } }
+      ports: [{ port: 8080 }]
+    # pipeline-events reads builds as pipeline-viewer (k8s/ci/30-pipeline-events.yaml).
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: pipeline-events } }
       ports: [{ port: 8080 }]
   egress:
     - to:

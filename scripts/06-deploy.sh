@@ -26,12 +26,21 @@ if [[ $ENV == prod && ${BURST:-auto} != off ]] \
   echo "==> AWS burst node is up: deploying chat-api-burst too"
 fi
 
+# Phase 8: dev keeps the colour chosen on "Be a Dev" (scripts/19-theme.sh), not values-dev.yaml's.
+THEME_ARGS=()
+if [[ $ENV == dev ]]; then
+  chosen=$(kubectl -n chatbot-dev get configmap chatbot-theme -o jsonpath='{.data.color}' 2>/dev/null || true)
+  if [[ $chosen =~ ^(teal|indigo|rose|amber|emerald|slate)$ ]]; then
+    THEME_ARGS=(--set theme="$chosen"); echo "==> dev keeps its chosen colour: $chosen"
+  fi
+fi
+
 helm lint helm/chatbot -f "helm/chatbot/values-$ENV.yaml" --set image.tag="$TAG"
 helm upgrade --install "chatbot-$ENV" helm/chatbot \
   --namespace "chatbot-$ENV" \
   -f "helm/chatbot/values-$ENV.yaml" \
   --set image.tag="$TAG" \
-  --set burst.enabled="$BURST_ON" \
+  --set burst.enabled="$BURST_ON" "${THEME_ARGS[@]}" \
   --atomic --wait --timeout 5m
 
 kubectl -n "chatbot-$ENV" get pods -o wide

@@ -186,6 +186,24 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .bk-run .term { margin: 0 0 10px; }
 .bk-run .term pre { max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
 
+/* pipeline page: live runs */
+.runs { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 6px; font-size: 13px; color: var(--muted); }
+.run-chip { background: var(--panel); color: var(--text); border: 1px solid var(--line); padding: 5px 10px;
+  border-radius: 999px; font-size: 12px; font-weight: 500; }
+.run-chip.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.run-chip.st-failed { border-left: 4px solid var(--fail); }
+.run-chip.st-passed { border-left: 4px solid var(--ok); }
+.run-chip.st-running, .run-chip.st-waiting { border-left: 4px solid var(--warning); }
+.run-head { margin: 8px 0 12px; }
+.run-title { font-size: 16px; }
+.run-meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.waiting { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 60%, transparent); background: color-mix(in srgb, var(--warning) 10%, transparent); }
+.station.waiting { border-color: var(--warning); animation: pulse 1.6s infinite; }
+.station.aborted { border-color: var(--wait); opacity: .8; }
+.station.skipped, .station.future { opacity: .45; cursor: default; }
+.station:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* capacity page: local vs AWS, side by side (stacked on narrow screens) */
 .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 16px; margin-top: 18px; }
 .half { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px; border-radius: 16px;

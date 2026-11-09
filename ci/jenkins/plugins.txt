@@ -7,3 +7,4 @@ git
 ssh-credentials
 timestamper
 pipeline-stage-view
+matrix-auth            # per-user permissions: a read-and-start-only account for the Pipeline page (Phase 8)

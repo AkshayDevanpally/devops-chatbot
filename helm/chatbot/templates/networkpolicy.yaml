@@ -40,6 +40,11 @@ spec:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: data } }
           podSelector: { matchLabels: { app.kubernetes.io/name: backup-ops } }
       ports: [{ port: 8080 }]
+    # Pipeline page and "Be a Dev".
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ci } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: pipeline-events } }
+      ports: [{ port: 8080 }]
     # Fixed queries for the Pulse page.
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }

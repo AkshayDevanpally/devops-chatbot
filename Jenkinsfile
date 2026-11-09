@@ -94,7 +94,9 @@ pipeline {
       options { timeout(time: 1, unit: 'DAYS') }
       steps {
         milestone(ordinal: 30, label: 'awaiting-prod')
-        input message: "Ship ${env.TAG} to prod?", ok: 'Ship it'
+        // Only admin may approve: the Pipeline page's Jenkins account (pipeline-viewer) can start jobs
+        // but must never be able to ship to prod.
+        input message: "Ship ${env.TAG} to prod?", ok: 'Ship it', submitter: 'admin'
         milestone(ordinal: 40, label: 'deploy-prod')       // cancels older builds still waiting for approval
         script {
           node('docker') {

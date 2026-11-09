@@ -60,6 +60,7 @@ spec:
             - { name: OLLAMA_URL, value: {{ .Values.ollamaUrl | quote }} }
             - { name: PROMETHEUS_URL, value: {{ .Values.prometheusUrl | quote }} }
             - { name: BACKUP_OPS_URL, value: {{ .Values.backupOpsUrl | quote }} }
+            - { name: PIPELINE_EVENTS_URL, value: {{ .Values.pipelineEventsUrl | quote }} }
             - { name: MODEL, value: {{ .Values.model | quote }} }
             - { name: COOKIE_SECURE, value: {{ .Values.cookieSecure | quote }} }
             - { name: CHAT_SLOTS, value: {{ .Values.api.chat.slots | quote }} }

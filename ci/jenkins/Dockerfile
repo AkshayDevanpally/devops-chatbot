@@ -19,5 +19,11 @@ RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt --view-s
 #   jenkins-plugin-manager.jar - build-time plugin installer (used above)
 #   git-lfs                    - this repo has no LFS files
 USER 0
-RUN rm -f /opt/jenkins-plugin-manager.jar /usr/bin/jenkins-plugin-cli /usr/local/bin/git-lfs
+# Pull Debian security fixes the Jenkins base image hasn't been rebuilt with yet (keeps Trivy green, e.g.
+# CVE-2026-109518 in apt, CVE-2026-76844/-85091 in zlib1g). Upgrades only: no new packages. Same as chat-api.
+# hadolint ignore=DL3005
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -f /opt/jenkins-plugin-manager.jar /usr/bin/jenkins-plugin-cli /usr/local/bin/git-lfs
 USER 1000

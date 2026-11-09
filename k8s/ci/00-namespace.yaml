@@ -18,11 +18,12 @@ metadata:
   namespace: ci
 spec:
   hard:
+    # Jenkins (1536Mi) + pipeline-events (96Mi, Phase 8); a third pod for a restart next to them.
     requests.cpu: 500m
     requests.memory: 1Gi
     limits.cpu: '2'
     limits.memory: 2Gi
-    pods: '2'
+    pods: '3'
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

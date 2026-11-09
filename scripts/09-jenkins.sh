@@ -48,6 +48,13 @@ else
   rm -rf "$tmp"
 fi
 
+# Added in Phase 8: the Pipeline page's read-and-start-only Jenkins account. Added to an existing secret too.
+if ! kubectl -n ci get secret jenkins-secrets -o jsonpath='{.data.pipeline-viewer-password}' | grep -q .; then
+  kubectl -n ci patch secret jenkins-secrets --type merge \
+    -p "{\"stringData\":{\"pipeline-viewer-password\":\"$(openssl rand -base64 24 | tr -d '/+=')\"}}" >/dev/null
+  echo "pipeline-viewer password generated"
+fi
+
 kubectl -n ci create configmap jenkins-settings \
   --from-literal=GIT_REPO_URL="$REPO_URL" --from-literal=GIT_BRANCH="$GIT_BRANCH" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -56,12 +63,40 @@ echo "==> controller"
 CONFIG_HASH=$( { cat k8s/ci/20-jenkins.yaml; echo "$REPO_URL $GIT_BRANCH"; } | sha256sum | cut -c1-12)
 sed -e "s|__JENKINS_IMAGE__|$IMAGE|" -e "s|__CONFIG_HASH__|$CONFIG_HASH|" k8s/ci/20-jenkins.yaml | kubectl apply -f -
 kubectl -n ci rollout status deployment/jenkins --timeout=600s
+
+# A job that config-as-code creates for the first time is written to disk, but Jenkins then loads the jobs
+# from disk a moment later and the new one is missing until a reload (seen with theme-deploy). Check each job
+# as admin from inside the pod (the password never leaves it) and reload from disk if one is missing.
+echo "==> jobs"
+for i in $(seq 30); do kubectl -n ci exec deploy/jenkins -- curl -sf -o /dev/null http://localhost:8080/login && break; sleep 5; done
+kubectl -n ci exec deploy/jenkins -- sh -c '
+  J=http://localhost:8080; A="admin:$(cat /run/secrets/admin-password)"
+  missing=""
+  for job in chatbot theme-deploy; do
+    [ "$(curl -s -o /dev/null -w "%{http_code}" -u "$A" "$J/job/$job/api/json")" = 200 ] || missing="$missing $job"
+  done
+  if [ -n "$missing" ]; then
+    echo "   missing:$missing -> reloading the configuration from disk"
+    crumb=$(curl -s -c /tmp/jar -u "$A" "$J/crumbIssuer/api/json" | sed -n "s/.*\"crumb\":\"\([^\"]*\)\".*\"crumbRequestField\":\"\([^\"]*\)\".*/\2: \1/p")
+    curl -s -o /dev/null -b /tmp/jar -u "$A" -H "$crumb" -X POST "$J/reload"; rm -f /tmp/jar
+    sleep 15
+  fi
+  for job in chatbot theme-deploy; do
+    printf "   %-14s %s\n" "$job" "$(curl -s -o /dev/null -w "%{http_code}" -u "$A" "$J/job/$job/api/json")"
+  done'
+
+echo "==> pipeline-events (Pipeline page and \"Be a Dev\")"
+kubectl -n ci create configmap pipeline-events-code --from-file=ci/pipeline-events/pipeline_events.py \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl apply -f k8s/ci/30-pipeline-events.yaml
+kubectl -n ci rollout restart deployment/pipeline-events >/dev/null
+kubectl -n ci rollout status deployment/pipeline-events --timeout=120s
 kubectl -n ci wait certificate/jenkins-tls --for=condition=Ready --timeout=120s
 
 cat <<MSG
 
 Jenkins is up: https://jenkins.chatbot.local  (user: admin, password: make jenkins-password)
-Add jenkins.chatbot.local to the hosts file of any PC you open it from.
+Other devices find jenkins.chatbot.local through the Raspberry Pi gateway (make pi-gateway).
 
 1) Add this READ-ONLY deploy key to GitHub (repo > Settings > Deploy keys > Add, leave "Allow write" off):
 

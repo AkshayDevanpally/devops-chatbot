@@ -24,6 +24,9 @@ PROD_BURST_AT = int(os.getenv("PROD_BURST_AT", "3"))
 # backup-ops in the data namespace: backup status, logs and "Back up now" on the Pulse page.
 # Empty = the Backups panel says "not connected" (e.g. Docker Compose).
 BACKUP_OPS_URL = os.getenv("BACKUP_OPS_URL", "")
+# pipeline-events in the ci namespace: live Jenkins builds (Pipeline page) and "Be a Dev" colour deploys.
+# Empty = the Pipeline page runs its demo, and colour requests are refused.
+PIPELINE_EVENTS_URL = os.getenv("PIPELINE_EVENTS_URL", "")
 
 MAX_USERS = 50            # enforced in the database too
 MAX_CHATS_PER_USER = 15   # enforced in the database too

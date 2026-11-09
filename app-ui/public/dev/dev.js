@@ -28,13 +28,21 @@ ship.onclick = async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ color: picked }),
   });
+  const d = await res.json().catch(() => ({}));
   if (res.status === 202) {
-    result.textContent = `Request accepted for "${picked}". Watch it on the Pipeline page.`;
-    setTimeout(() => { location.href = "/pipeline/"; }, 1500);
+    result.textContent = `"${picked}" is on its way through the pipeline. Opening the Pipeline page…`;
+    setTimeout(() => { location.href = "/pipeline/?job=theme-deploy"; }, 1500);
+    return;
   } else if (res.status === 429) {
     result.textContent = "One colour change per 5 minutes. Try again shortly.";
-  } else {
+  } else if (res.status === 409) {
+    result.textContent = "A colour change is already on its way. Watch it on the Pipeline page.";
+  } else if (res.status === 503) {
+    result.textContent = "The pipeline isn't connected here (only in Kubernetes).";
+  } else if (res.status === 422) {
     result.textContent = "That colour isn't allowed.";
+  } else {
+    result.textContent = d.detail || "Couldn't start the pipeline. Try again in a minute.";
   }
   ship.disabled = false;
 };

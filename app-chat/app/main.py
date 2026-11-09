@@ -44,6 +44,7 @@ HTTP_LATENCY = Histogram("http_request_seconds", "Time until response headers", 
 pool: AsyncConnectionPool | None = None
 http: httpx.AsyncClient | None = None
 backup_http: httpx.AsyncClient | None = None
+pipeline_http: httpx.AsyncClient | None = None
 pulse_source: pulse.Pulse | None = None
 capacity_source: capacity.Capacity | None = None
 signer = URLSafeSerializer(config.SESSION_SECRET, salt="uid")
@@ -51,7 +52,7 @@ signer = URLSafeSerializer(config.SESSION_SECRET, salt="uid")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global pool, http, backup_http, pulse_source, capacity_source
+    global pool, http, backup_http, pipeline_http, pulse_source, capacity_source
     pool = AsyncConnectionPool(config.DATABASE_URL, min_size=1, max_size=5, open=False)
     await pool.open(wait=False)
     # Metrics on a separate port that is NOT behind the ingress, so they're never public.
@@ -62,14 +63,18 @@ async def lifespan(_: FastAPI):
         capacity_source = capacity.Capacity(config.PROMETHEUS_URL, config.APP_ENV, config.PROD_BURST_AT)
     if config.BACKUP_OPS_URL:
         backup_http = httpx.AsyncClient(base_url=config.BACKUP_OPS_URL, timeout=httpx.Timeout(10, connect=3))
-    jlog("startup", model=config.MODEL, pulse=bool(pulse_source), backups=bool(backup_http))
+    if config.PIPELINE_EVENTS_URL:
+        pipeline_http = httpx.AsyncClient(base_url=config.PIPELINE_EVENTS_URL, timeout=httpx.Timeout(15, connect=3))
+    jlog("startup", model=config.MODEL, pulse=bool(pulse_source), backups=bool(backup_http),
+         pipeline=bool(pipeline_http))
     yield
     for source in (pulse_source, capacity_source):
         if source:
             await source.aclose()
     await http.aclose()
-    if backup_http:
-        await backup_http.aclose()
+    for client in (backup_http, pipeline_http):
+        if client:
+            await client.aclose()
     await pool.close()
 
 
@@ -386,14 +391,52 @@ async def themes():
     return {"themes": config.ALLOWED_THEMES}
 
 
+async def pipeline_events(method: str, path: str, **kw) -> tuple[int, dict]:
+    if not pipeline_http:
+        return 503, {"error": "pipeline not connected"}
+    try:
+        r = await pipeline_http.request(method, path, **kw)
+        return r.status_code, r.json()
+    except (httpx.HTTPError, ValueError):
+        return 502, {"error": "pipeline service unreachable"}
+
+
 @app.post("/api/theme", status_code=202)
 async def request_theme(body: ThemeIn, request: Request, response: Response):
+    """"Be a Dev": start the theme-deploy job in Jenkins (through pipeline-events)."""
     uid = get_or_set_uid(request, response)
     if rate_limited(f"theme:{uid}", 1, window=300):
         raise HTTPException(429, "one colour change per 5 minutes")
-    jlog("theme_requested", color=body.color)
-    return {"accepted": True, "color": body.color,
-            "note": "Pipeline trigger is added in Phase 8 (Jenkins theme-deploy job)."}
+    code, data = await pipeline_events("POST", "/theme", json={"color": body.color})
+    jlog("theme_requested", color=body.color, result=code)
+    if code != 202:
+        raise HTTPException(code if code in (400, 409, 503) else 502, data.get("error", "not started"))
+    return {"accepted": True, "color": body.color}
+
+
+# ---------- Pipeline page: live Jenkins builds (through pipeline-events) ----------
+PIPELINE_JOB = r"^(chatbot|theme-deploy)$"
+
+
+@app.get("/api/pipeline")
+async def pipeline_view(request: Request, response: Response, job: str = Query("chatbot", pattern=PIPELINE_JOB)):
+    if rate_limited(f"pipeline:{request.client.host}", 40):
+        raise HTTPException(429, "too many refreshes")
+    code, data = await pipeline_events("GET", "/pipeline", params={"job": job})
+    response.headers["Cache-Control"] = "no-store"
+    return data if code == 200 else {"available": False, "job": job, "error": data.get("error", "unavailable")}
+
+
+@app.get("/api/pipeline/log")
+async def pipeline_log(request: Request, response: Response, job: str = Query(pattern=PIPELINE_JOB),
+                       build: int = Query(ge=1, le=1_000_000), stage: int = Query(ge=1, le=10_000_000)):
+    if rate_limited(f"pipeline-log:{request.client.host}", 40):
+        raise HTTPException(429, "too many requests")
+    code, data = await pipeline_events("GET", "/log", params={"job": job, "build": build, "stage": stage})
+    if code != 200:
+        raise HTTPException(404 if code == 404 else 502, data.get("error", "log unavailable"))
+    response.headers["Cache-Control"] = "no-store"
+    return data
 
 
 # ---------- Pulse: live dashboard data ----------
