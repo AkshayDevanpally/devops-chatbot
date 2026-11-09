@@ -22,6 +22,7 @@ browser ─HTTPS─► Traefik ingress (k3s, cert from cert-manager) ──► u
 | `Jenkinsfile` | CI/CD pipeline: checkout → build → test → scan → SBOM + push → dev → qa → approved prod |
 | `ci/jenkins/`, `k8s/ci/` | Jenkins controller image (plugins baked in) and its k3s manifests + deployer RBAC |
 | `ci/theme-deploy.Jenkinsfile`, `scripts/19-theme.sh` | The "Be a Dev" colour deploy job (validate → deploy dev → verify) |
+| `netlify.toml`, `scripts/netlify-build.py`, `app-ui/showcase/` | Public showcase on Netlify (Phase 9): build, headers, dashboard snapshot |
 | `ci/pipeline-events/` | Small read-mostly bridge: the Pipeline page's view of Jenkins (runs, stages, redacted logs) |
 | `k8s/tls/` | cert-manager namespace + policies, local CA, Traefik HTTP→HTTPS redirect |
 | `k8s/platform/` | Namespaces (PSA restricted), quotas, default-deny network policies, Ollama, Postgres, Prometheus |
@@ -240,6 +241,26 @@ kubectl -n chatbot-dev describe quota    # how full each environment is
 helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n chatbot-prod
 ./scripts/19-theme.sh show               # dev's "Be a Dev" colour
 kubectl -n ci logs deploy/pipeline-events  # the Pipeline page's link to Jenkins
+```
+
+## Public showcase on Netlify (Phase 9)
+
+A static copy of the site for the public, built by Netlify from GitHub on every push to `master`
+(`netlify.toml`). **No request reaches the home server**: nothing at home is exposed.
+
+- Architecture, Journal and the page designs work fully. Pulse, Capacity and the Backups panel show a **snapshot**
+  of prod's data, labelled with its date. The Pipeline page plays its demo build. Chat and Be a Dev explain that
+  they need the home network. A line under the header on every page says it's a showcase.
+- How: `scripts/netlify-build.py` copies `app-ui/public` to `dist/`, builds the Journal data from `docs/` (with the
+  usual redaction, now also MAC addresses and home paths), adds `app-ui/showcase/`, and writes a `config.js` with
+  `window.SHOWCASE` set. In that mode `api()` in `common.js` never calls an API. The same security headers as at home.
+- **One-time setup on netlify.com:** Add new site → Import an existing project → GitHub → pick this repo (give the
+  Netlify app access to it) → branch `master`; the build settings come from `netlify.toml` → Deploy.
+
+```bash
+make showcase-snapshot   # save prod's Pulse, Capacity and Backups data into app-ui/showcase/ (commit it to publish)
+make showcase-build      # build dist/ exactly as Netlify does
+make showcase-preview    # build and serve it on http://127.0.0.1:8088
 ```
 
 ## Overload protection

@@ -10,6 +10,7 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
+ 15  9 Nov 2026    Phase 9: public showcase on Netlify                 Built; Netlify link pending
  14  9 Nov 2026    Architecture page brought up to date (phases 1-8)   Done on dev
  13  9 Nov 2026    Phase 8: live Pipeline page, real Be a Dev deploys  Done, checks passed
  12  9 Nov 2026    Server-down alerts from the Pi                      Done, checks passed
@@ -28,6 +29,49 @@ SUMMARY
 
 DETAILS
 -------
+
+15. Phase 9: public showcase on Netlify
+
+Date:        9 November 2026
+Commands:    make showcase-snapshot, make showcase-build, make showcase-preview
+             (scripts/20-showcase.sh); Netlify runs python3 -I scripts/netlify-build.py
+Why:         to make the project public without opening the home network. The chat needs the
+             model on the home server, which sleeps and is only reachable at home, so the
+             public site is a static copy ("showcase first"; a live chat could come later).
+Changed:     netlify.toml, scripts/netlify-build.py, scripts/20-showcase.sh, app-ui/showcase/
+             (snapshot), app-ui/public/common.js, config.js, chat.js, dev/dev.js,
+             pulse/pulse.js, pulse/backups.js, capacity/capacity.js, styles.css,
+             app-ui/journal/build_journal.py (redaction), Makefile, .gitignore (dist/)
+
+How it works:
+- Netlify is connected to the GitHub repo and builds on every push to master. The build
+  copies the pages, builds the Journal data from docs/, adds the dashboard snapshot, and
+  writes config.js with window.SHOWCASE = {taken: <time>}.
+- With SHOWCASE set, api() in common.js never sends a request to an API:
+  - Pulse, Capacity and the Backups panel read the snapshot files (labelled "Snapshot from
+    <date>" instead of "Live");
+  - the Pipeline page gets "not available" and plays its demo build;
+  - Chat, Be a Dev and Back up now explain that they need the home server.
+- A line under the header on every page says it's a public showcase and links to the
+  Architecture page.
+- Same security headers as nginx at home (CSP, no framing, nosniff, ...) plus HSTS. Any
+  /api/... address answers 404 with a short JSON note.
+- The snapshot (prod, 17:29 UTC today: Pulse for 15 min / 1 h / 6 h, Capacity, Backups) is
+  checked before it is saved: the script refuses files with private addresses, emails, AWS
+  keys or "password". Refresh it with make showcase-snapshot and commit.
+
+Privacy check of everything published (dist/): no secrets, keys, tokens, emails or the
+ntfy topic. Found and fixed: the server's MAC address (twice) and a home folder path in the
+Journal data; the Journal generator now redacts MAC addresses and /home/<user> paths, at
+home too. The Architecture page keeps the home network addresses (192.168.1.x): they can't
+be reached from the internet, and the page is about them.
+
+Result:      dist/ builds (28 files); every page and data file served by a local preview;
+             all changed scripts pass node --check. The home site is unchanged (SHOWCASE is
+             null there). Not checked in a browser: running a headless Chrome container was
+             blocked by an automated permission check (see Issue 47).
+Next:        connect the repo on netlify.com (README, "Public showcase on Netlify").
+Issues:      Issue 47 in docs/capacity-journal-issues.md
 
 14. Architecture page brought up to date
 

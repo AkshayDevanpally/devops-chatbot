@@ -26,6 +26,7 @@ Problems hit on 4–5 November 2026:
 - Issue 42 (9 November): a test sleep that ended by itself after 30 seconds.
 - Issues 43–46 (9 November): Phase 8, the live Pipeline page and real "Be a Dev" deploys: a security scan
   failure in the Jenkins image, a new job missing after a restart, a test that lost its cookie, and slips while testing.
+- Issue 47 (9 November): Phase 9, getting ready to publish the site on Netlify.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -75,6 +76,7 @@ Problems hit on 4–5 November 2026:
 | 44 | New Jenkins job `theme-deploy` missing after the restart, although job-dsl created it | CI / Jenkins | Fixed |
 | 45 | Rate-limit test got 409 instead of 429: the error response dropped the visitor cookie | Tests | Fixed |
 | 46 | Mistakes while testing Phase 8 (curl brackets, quoting, wrong stage id, sed miss, early check) | Process | Fixed |
+| 47 | Public showcase: MAC address and a home path in the Journal data; a latent Be a Dev crash; no browser check | Privacy / frontend | Fixed (browser check open) |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -1197,4 +1199,34 @@ requests, so it wasn't affected (the live test got 202, then 429).
   the lines directly.
 - **Agent looked offline:** right after the Jenkins restart the build agent showed as offline. The check came too
   early: the agent reconnected on its own at 16:10:31.
+
+
+### Issue 47 — Getting the site ready for the public (Netlify)
+
+**Date:** 9 November 2026, Phase 9.
+
+**1. Private details in the Journal data.** Before publishing, every built file in `dist/` was scanned for keys,
+tokens, emails, the ntfy topic, MAC addresses, IP addresses and user names. No secrets, but the Journal data had:
+
+```text
+dist/journal/journal.json: f8:bc:… (the server's MAC address, twice: Issues 36 and 39)
+dist/journal/journal.json: one /home/<user>/… path
+```
+
+The generator already redacted private IPs, keys, long hex strings, passwords and emails, but not these. A MAC address
+isn't dangerous on its own, but it identifies the machine and has no reason to be public. **Fix:**
+`app-ui/journal/build_journal.py` now replaces MAC addresses with `‹mac›` and `/home/<user>` with `~`, for the home
+site too. Rescan: none left. The Pi's login name and the GitHub user name stay (neither machine is reachable from the
+internet; the repo is private).
+
+**2. A latent crash on Be a Dev.** `dev.js` read `(await res.json()).themes` and then called `themes.forEach`. Any
+answer without a `themes` field (like the showcase's "no backend" reply, or an error page) made it `undefined`, and
+the colour swatches never appeared. **Fix:** fall back to the built-in list (`... .themes || themes`).
+
+**3. No browser check.** The server has no browser and no Node.js. The changed scripts were checked with `node --check`
+in a throwaway `node:22-alpine` container with no network, and the built site was served locally and every page
+and data file fetched (all 200). Rendering the pages in a headless Chrome container was **blocked by an automated
+permission check** (a third-party image with host networking), so the pages haven't been looked at in a browser
+yet. **Next step:** `make showcase-preview` and open http://127.0.0.1:8088 (in VS Code Remote, forward port 8088),
+or look at the Netlify deploy preview once connected.
 
