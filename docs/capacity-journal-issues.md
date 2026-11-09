@@ -9,6 +9,8 @@ Problems hit on 4–5 November 2026:
 - Issues 16–18: builds #8, #10 and #11 (5 November): a failed GitHub fetch, and the new Architecture page's
   check failing in dev, plus the mistakes made while fixing it. Build #12 then shipped to prod.
 - Issue 19: setting up nightly Postgres backups (on the server, 14 days, weekly restore test).
+- Issue 20 (9 November): Phase 5 home side, TLS for Postgres and the tunnel rules (see docs/updates.txt).
+- Issue 21 (9 November): Phase 5 tunnel test against a small AWS node (see docs/updates.txt).
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -31,6 +33,8 @@ Problems hit on 4–5 November 2026:
 | 17 | Builds #10 and #11 failed "Architecture page served" in dev and rolled back | Testing / deploy | Fixed |
 | 18 | Mistakes: a known issue repeated, a wrong first diagnosis, two deploys to dev at once | Process | Fixed |
 | 19 | First backup job: "Connection refused" from Postgres | Backups / network | Fixed |
+| 20 | Postgres TLS check: "Connection refused" from inside the Postgres pod | Testing / network | Fixed |
+| 21 | Tunnel test: AWS node setup did not finish (dnf OOM-killed), then a false handshake failure | AWS / testing | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -424,3 +428,78 @@ in full in each job.
 
 **Lesson:** any short-lived pod that talks over the network right at start-up (jobs, probes) must wait for its
 target first. The verify script's probe pod already did, for the same reason.
+
+### Issue 20 — Postgres TLS check: "Connection refused" from inside the Postgres pod
+
+**Date:** 9 November 2026, first run of `make db-tls` (Phase 5 home side).
+
+**Symptom:** Postgres restarted with TLS on and the first two checks passed, then the script stopped with no
+message. Running the check by hand showed:
+
+```text
+psql: error: connection to server at "postgres.data.svc.cluster.local" (10.43.203.19), port 5432 failed: Connection refused
+```
+
+**Cause:** two problems.
+- **The check ran in the wrong pod.** It used `kubectl exec` into `postgres-0` and connected to the Service
+  from there. The `data` namespace denies all outgoing traffic by default (only DNS is allowed), so the
+  Postgres pod may not open a connection, not even to itself. k3s refuses those packets, which looks like
+  "Connection refused". Postgres itself was fine: the app pods had already reconnected over TLS 1.3.
+- **A failed check stopped the script.** The result was read with `got=$(...)` under `set -e`, so the
+  non-zero exit ended the script before `check` could print FAIL.
+
+**Fix:** the network check now runs in a short-lived probe pod with the backup job's label, which may reach
+Postgres on 5432 and nothing else. It waits for `pg_isready` first (Issue 19), then connects with
+`sslmode=verify-full` against the local CA. Command results are read with `|| true`, so a failure is
+reported as FAIL and the remaining checks still run. Second run: 9 of 9 passed, `make verify ENV=dev` 25 of 25.
+
+**Also noted:** `kubectl apply` warns that `spec.externalIPs` (used by the `postgres-tunnel` Service on
+`10.200.0.1`) is deprecated. k3s still supports it; the tunnel test will confirm it end to end, with a host
+port rule as the fallback.
+
+**Lesson:** test a network path from a pod that is meant to use it. The default-deny rules apply to the
+server's own pod too.
+
+### Issue 21 — Tunnel test: AWS node setup did not finish, then a false handshake failure
+
+**Date:** 9 November 2026, first `make tunnel-test` (Phase 5).
+
+**Symptom 1:** the test stopped while waiting for the AWS node:
+
+```text
+==> waiting for the AWS node to register with SSM and finish setup
+node setup (user data) did not finish
+```
+
+**Cause:** the node's boot log (`aws ec2 get-console-output`) showed the kernel killing the package installer:
+
+```text
+dnf invoked oom-killer ...
+Out of memory: Killed process 2065 (dnf) ...
+part-001: line 48:  2065 Killed    dnf install -y -q postgresql16
+```
+
+A t4g.nano has 512 MB and no swap, and `dnf` loading the package lists needs more. WireGuard had already been
+set up by then (it comes first in the user data), so only the Postgres client and the "ready" marker were missing.
+
+**Fix:** the user data now makes a 1 GB swap file before `dnf`. The running node was finished over SSM instead
+of being rebuilt, which would have changed its public IP and the home `wg0.conf`. A slip on the way: the first
+SSM attempt failed because Amazon Linux's `mkswap` has no `-q` option; it now sends the output to `/dev/null`.
+
+**Symptom 2:** the next run passed six checks and failed one:
+
+```text
+FAIL  WireGuard handshake with home (latest: 'none')
+PASS  home end of the tunnel answers ping
+```
+
+**Cause:** a mistake in the test. It read the handshake time with `wg show`, but the AWS node runs WireGuard
+through systemd-networkd and has no `wg` tool, so the answer was always empty. The passing ping already proved
+the tunnel.
+
+**Fix:** that check was replaced by a stronger one on the home side: Postgres must log the caller as
+`10.200.0.2`. This proves the tunnel address survives the trip (no NAT in between), which `pg_hba.conf` and the
+NetworkPolicy depend on. Third run: 7 of 7 passed.
+
+**Lesson:** size even a throwaway node for the tools it installs, and make each check depend only on tools that
+are known to be on the machine it runs on.

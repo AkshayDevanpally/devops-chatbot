@@ -1,0 +1,102 @@
+QWENOPS - UPDATES
+=================
+
+A dated log of changes to the platform, newest first. Problems hit along the way are written
+up in docs/capacity-journal-issues.md.
+
+
+SUMMARY
+-------
+
+ #   Date          Update                                              Status
+ --  ------------  --------------------------------------------------  -------------------
+ 3   9 Nov 2026    Phase 5 tunnel test: Terraform + WireGuard          Done, checks passed
+ 2   9 Nov 2026    Phase 5 home side: Postgres TLS and tunnel rules    Done, checks passed
+ 1   9 Nov 2026    AWS account access for Phases 5-9                   Done
+
+
+DETAILS
+-------
+
+3. Phase 5 tunnel test: Terraform and WireGuard
+
+Date:        9 November 2026
+Commands:    make tunnel-up, make tunnel-test, make tunnel-down, make tunnel-status
+             (scripts/12-tunnel.sh)
+Why:         prove that something in AWS can reach the home Postgres through the tunnel, with the
+             rules from update 2, before Phase 6 builds burst compute on it.
+Changed:     terraform/tunnel/ (new), scripts/12-tunnel.sh (new), Makefile
+Tools:       terraform 1.17.1 and wireguard-tools 1.0.20260223 installed on the server.
+
+- AWS side (Terraform, local state, everything destroyable): its own VPC 10.100.0.0/16, one
+  public subnet, one t4g.nano running Amazon Linux 2023 (arm64) in ap-south-1. Only WireGuard
+  (UDP 51820) from the home public IP is let in. No SSH and no key pair; commands go through
+  AWS Systems Manager. IMDSv2 only, encrypted disk. Plan: 10 resources, about 1 US cent an hour.
+- WireGuard on the AWS node uses systemd-networkd (built in, no package). AWS end 10.200.0.2,
+  home end 10.200.0.1. The home server dials out (keepalive 25 s), so no router port forward.
+- Keys are kept outside the repo in ~/.config/qwenops-tunnel (mode 0700). The home key is kept;
+  the AWS key is new on every tunnel-up and deleted on tunnel-down.
+- Home wg0 needs root: tunnel-up prints the sudo lines to run (install wg0.conf, wg-quick up).
+- tunnel-test runs on the AWS node and never sends a real password. It checks: the WireGuard
+  handshake; ping to the home end; an app login gets as far as the password prompt (so TLS
+  verify-full and pg_hba.conf passed); the superuser, another env's database, a connection
+  without TLS and a wrong certificate host name are all refused.
+- tunnel-down takes wg0 down, runs terraform destroy, deletes the AWS key and lists anything
+  still tagged Stack=tunnel.
+
+Result:      7 of 7 checks passed (9 November, AWS node in ap-south-1a):
+             - the home end 10.200.0.1 answers ping through the tunnel;
+             - an app login (chat_dev) gets as far as the password prompt, so TLS verify-full
+               and pg_hba.conf both passed;
+             - refused: the superuser, chat_dev asking for chat_prod's database, a connection
+               without TLS, and a wrong certificate host name;
+             - Postgres logs the caller as 10.200.0.2, so the tunnel address is kept and the
+               rules apply to it.
+             ufw did not block the tunnel traffic, and the externalIPs Service works on k3s.
+Fixes:       the t4g.nano ran out of memory installing the Postgres client, and the handshake
+             check needed a tool the node doesn't have. See Issue 21.
+How it ran:  the first tunnel-up was blocked by an automated permission check, so it was run by
+             hand, with the sudo lines for wg0; the node was then finished over SSM.
+Next:        make tunnel-down (destroy everything in AWS), then Phase 6, burst compute.
+
+2. Phase 5 home side: Postgres TLS and tunnel rules
+
+Date:        9 November 2026
+Command:     make db-tls (scripts/11-db-tls.sh), safe to run again
+Why:         AWS burst pods (Phase 6) will reach the home Postgres through a WireGuard tunnel.
+             Before that, Postgres must encrypt connections and only accept the tunnel for the
+             app logins.
+Changed:     k8s/platform/40-postgres.yaml, k8s/tunnel/10-postgres-tls.yaml, Makefile, README.md
+
+- TLS: Postgres has a server certificate from the local CA (90 days, renewed 30 days early,
+  new key each time). TLS 1.3 is the minimum. A small sidecar (tls-reload) checks every
+  5 minutes and reloads Postgres when the certificate or pg_hba.conf changes, so no restart.
+- The apps switched to TLS 1.3 on their own; their settings did not need to change.
+- pg_hba.conf is now a ConfigMap. The tunnel subnet 10.200.0.0/24 gets TLS plus SCRAM, app
+  logins only (chat_dev, chat_qa, chat_prod), each into its own database; the postgres
+  superuser cannot log in over the tunnel. Pods in the cluster keep SCRAM. Every other
+  address is rejected (before, any address could try a password).
+- Service postgres-tunnel answers on the home end of the tunnel, 10.200.0.1:5432. The
+  NetworkPolicy postgres-allow lets that subnet in on port 5432 only.
+- AWS clients connect with sslmode=verify-full and the CA file certs/postgres-ca.crt.
+- Postgres restarted once (a few seconds without a database for the apps), after a backup.
+  The restart also applied the Postgres memory sizing committed in Phase 3.4 but never
+  deployed (768Mi limit, 256MB shared_buffers).
+
+Result:      9 of 9 db-tls checks passed; make verify ENV=dev passed 25 of 25.
+Next:        the tunnel test (update 3).
+Issues:      Issue 20 in docs/capacity-journal-issues.md
+
+1. AWS account access for Phases 5-9
+
+Date:        9 November 2026
+Why:         Terraform needs an AWS login for the tunnel test (Phase 5) and burst compute.
+Changed:     nothing in the repo; credentials live only in ~/.aws on the server
+
+- AWS CLI profile "chatbot" set up with aws configure: a dedicated IAM user (not root)
+  with administrator access, region ap-south-1 (Mumbai, closest to home).
+- Root account has MFA. The IAM user has no MFA, so its access key must stay private and
+  be rotated or deleted when AWS is not in use.
+- An existing budget alert fires at 1 USD per month; a second one at about 10 USD is
+  planned so alerts point at real spend.
+- Default output format: json.
