@@ -10,6 +10,7 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
+ 14  9 Nov 2026    Architecture page brought up to date (phases 1-8)   Done on dev
  13  9 Nov 2026    Phase 8: live Pipeline page, real Be a Dev deploys  Done, checks passed
  12  9 Nov 2026    Server-down alerts from the Pi                      Done, checks passed
  11  9 Nov 2026    Phase 7: Raspberry Pi gateway, wake on visit        Done, checks passed
@@ -27,6 +28,34 @@ SUMMARY
 
 DETAILS
 -------
+
+14. Architecture page brought up to date
+
+Date:        9 November 2026
+Page:        https://<env>.chatbot.local/architecture/
+Why:         the page was last drawn on 5 November and still showed phases 5-9 as planned,
+             the old addresses (.104 was the server then; it is the Pi now), and none of
+             the services added since.
+Changed:     app-ui/public/architecture/index.html, architecture.css
+
+Now 14 sections:
+- overview map: the Pi gateway and router in front of the server, every namespace with
+  the new services (pipeline-events, backup-ops, Alertmanager, ntfy-bridge), the host
+  services (sleep, Wake-on-LAN, wg0) and the AWS pieces;
+- addresses and ports: every IP and port on the home network, in the cluster and in the
+  tunnel, with who may use it;
+- a chat end to end (through the Pi, TLS only at Traefik, the ModelGate, burst pods);
+- sleep and wake as a step-by-step sequence (announce, waking page, magic packet,
+  ready check, the Pi's down alerts);
+- network rules: the app's paths and a table of every allowed path in the cluster;
+- delivery pipeline (current stage names, prod approval admin-only), the live Pipeline
+  page and Be a Dev, backups, alerts, AWS on demand (tunnel, burst, guardrails),
+  security layers (now with the Pi, Jenkins and AWS), resources with priority classes
+  and overload, Docker Compose, and the phase list (1-8 done, 9 planned).
+
+Result:      deployed to dev as 9ab1666-arch; all 11 diagrams parse, no text runs out of
+             its box (checked with a script, as no browser is installed on the server);
+             make verify ENV=dev: 25 of 25. Reaches qa and prod with the next push.
 
 13. Phase 8: live Pipeline page and real "Be a Dev" colour deploys
 
