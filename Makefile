@@ -1,4 +1,4 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore db-tls tunnel-up tunnel-test tunnel-down tunnel-status
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
@@ -84,6 +84,36 @@ tunnel-down:   ## home wg0 down + destroy everything in AWS
 
 tunnel-status: ## AWS endpoint and wg0 state
 	./scripts/12-tunnel.sh status
+
+burst-prepare: ## Phase 6, once: firewall rules on wg0 for the AWS burst node (sudo)
+	sudo ./scripts/13-burst.sh prepare
+
+burst-up:      ## Phase 6: AWS Spot node joins k3s, runs extra prod chat-api + Ollama (~$0.06/h)
+	./scripts/13-burst.sh up
+
+burst-ready:   ## finish burst-up after running its sudo lines
+	./scripts/13-burst.sh ready
+
+burst-test:    ## check the burst node, its pods, Postgres over TLS, the model, the Capacity page
+	./scripts/13-burst.sh test
+
+burst-down:    ## burst pods off, node removed, wg0 down, destroy everything in AWS
+	./scripts/13-burst.sh down
+
+burst-status:  ## AWS node, wg0 and pods on the burst node
+	./scripts/13-burst.sh status
+
+guardrails-up: ## AWS $10/month budget: emails, then deny-create + kill switch at 100% (stays up, $0)
+	./scripts/14-guardrails.sh up
+
+guardrails-test: ## kill switch dry run: what it would terminate right now
+	./scripts/14-guardrails.sh test
+
+guardrails-status: ## spend this month, budget action state, deny policy attached?
+	./scripts/14-guardrails.sh status
+
+guardrails-reset: ## after a cut-off: give the Terraform user its create rights back
+	./scripts/14-guardrails.sh reset
 
 verify:        ## functional + security checks (ENV=dev|qa|prod)
 	./scripts/07-verify.sh $(or $(ENV),dev)

@@ -15,11 +15,23 @@ if [[ $ENV == prod && ${PROD_APPROVED:-} != yes ]]; then
   [[ $ok == yes ]] || { echo "aborted"; exit 1; }
 fi
 
+# Phase 6: prod keeps its burst pods while an AWS burst node is Ready and its Ollama exists.
+# BURST=off forces them off (scripts/13-burst.sh down).
+BURST_ON=false
+if [[ $ENV == prod && ${BURST:-auto} != off ]] \
+   && kubectl get nodes -l qwenops.io/burst=true \
+        -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null | grep -qx True \
+   && kubectl -n ai get deployment ollama-burst >/dev/null 2>&1; then
+  BURST_ON=true
+  echo "==> AWS burst node is up: deploying chat-api-burst too"
+fi
+
 helm lint helm/chatbot -f "helm/chatbot/values-$ENV.yaml" --set image.tag="$TAG"
 helm upgrade --install "chatbot-$ENV" helm/chatbot \
   --namespace "chatbot-$ENV" \
   -f "helm/chatbot/values-$ENV.yaml" \
   --set image.tag="$TAG" \
+  --set burst.enabled="$BURST_ON" \
   --atomic --wait --timeout 5m
 
 kubectl -n "chatbot-$ENV" get pods -o wide

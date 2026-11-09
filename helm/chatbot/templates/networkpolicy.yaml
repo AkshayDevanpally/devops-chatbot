@@ -27,7 +27,9 @@ spec:
   egress:
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ai } }
-          podSelector: { matchLabels: { app.kubernetes.io/name: ollama } }
+          podSelector:
+            matchExpressions:   # ollama-burst runs on the AWS node (Phase 6)
+              - { key: app.kubernetes.io/name, operator: In, values: [ollama, ollama-burst] }
       ports: [{ port: 11434 }]
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: data } }

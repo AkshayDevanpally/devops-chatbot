@@ -1,0 +1,97 @@
+{{- if .Values.burst.enabled }}
+# Phase 6: extra prod chat-api pods on the AWS burst node, using the Ollama that runs there.
+# Same image tag as chat-api. They keep the label app.kubernetes.io/component=api, so the chat-api
+# Service, Traefik and every NetworkPolicy treat them like the home pods; chatbot.io/pool=burst
+# keeps this Deployment's selector apart from chat-api's.
+# Turned on by scripts/13-burst.sh up, and by scripts/06-deploy.sh while a burst node is Ready.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-api-burst
+  labels: {{- include "chatbot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+    chatbot.io/pool: burst
+spec:
+  replicas: {{ .Values.burst.replicas }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels: { app.kubernetes.io/component: api, chatbot.io/pool: burst }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels: {{- include "chatbot.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+        chatbot.io/pool: burst
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: chat-api
+      automountServiceAccountToken: false
+      priorityClassName: qwenops-burst          # counted by the "burst" quota, not the home one
+      nodeSelector: { qwenops.io/burst: "true" }
+      tolerations:
+        - { key: qwenops.io/burst, operator: Equal, value: "true", effect: NoSchedule }
+      securityContext:
+        {{- include "chatbot.podSecurityContext" . | nindent 8 }}
+        runAsUser: 10001
+        runAsGroup: 10001
+      initContainers:
+        - name: migrate
+          image: "{{ .Values.image.registry }}/chat-api:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.migrate"]
+          envFrom: [{ secretRef: { name: {{ .Values.existingSecret }} } }]
+          env: &pgtls
+            # Postgres is at home: insist on TLS and check its certificate against the local CA.
+            - { name: PGSSLMODE, value: verify-full }
+            - { name: PGSSLROOTCERT, value: /etc/postgres-ca/ca.crt }
+          securityContext: {{- include "chatbot.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          volumeMounts: &mounts
+            - { name: tmp, mountPath: /tmp }
+            - { name: postgres-ca, mountPath: /etc/postgres-ca, readOnly: true }
+      containers:
+        - name: chat-api
+          image: "{{ .Values.image.registry }}/chat-api:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom: [{ secretRef: { name: {{ .Values.existingSecret }} } }]
+          env:
+            - { name: APP_ENV, value: {{ .Values.env | quote }} }
+            - { name: OLLAMA_URL, value: {{ .Values.burst.ollamaUrl | quote }} }
+            - { name: PROMETHEUS_URL, value: {{ .Values.prometheusUrl | quote }} }
+            - { name: MODEL, value: {{ .Values.model | quote }} }
+            - { name: COOKIE_SECURE, value: {{ .Values.cookieSecure | quote }} }
+            - { name: PGSSLMODE, value: verify-full }
+            - { name: PGSSLROOTCERT, value: /etc/postgres-ca/ca.crt }
+          ports:
+            - { name: http, containerPort: 8000 }
+            - { name: metrics, containerPort: 9100 }
+          securityContext: {{- include "chatbot.containerSecurityContext" . | nindent 12 }}
+          resources: {{- toYaml .Values.api.resources | nindent 12 }}
+          startupProbe:
+            httpGet: { path: /api/healthz, port: http }
+            failureThreshold: 20
+            periodSeconds: 3
+          readinessProbe:                       # db (over the tunnel) + the AWS Ollama reachable
+            httpGet: { path: /api/readyz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          lifecycle:
+            preStop: { sleep: { seconds: 5 } }
+          livenessProbe:
+            httpGet: { path: /api/healthz, port: http }
+            periodSeconds: 20
+          volumeMounts: *mounts
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+        - name: postgres-ca                     # public CA certificate, made by scripts/13-burst.sh
+          configMap: { name: postgres-ca }
+{{- end }}

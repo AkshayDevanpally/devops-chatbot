@@ -98,6 +98,11 @@ data:
         authorization: { credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token }
         tls_config: { insecure_skip_verify: true }   # k3s kubelet serves a self-signed certificate
         kubernetes_sd_configs: [{ role: node }]
+        # AWS burst nodes carry the node label qwenops.io/cloud=aws; it becomes cloud="aws" on every
+        # series, which is how the Capacity page keeps local and AWS numbers apart.
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_label_qwenops_io_cloud]
+            target_label: cloud
 
       # Only the host's total CPU cores and memory, for the "% of host" tiles.
       - job_name: kubelet-capacity
@@ -107,6 +112,9 @@ data:
         authorization: { credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token }
         tls_config: { insecure_skip_verify: true }
         kubernetes_sd_configs: [{ role: node }]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_label_qwenops_io_cloud]
+            target_label: cloud
         metric_relabel_configs:
           - source_labels: [__name__]
             regex: machine_(cpu_cores|memory_bytes)

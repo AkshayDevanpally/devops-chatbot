@@ -3,12 +3,57 @@
 #   dev/qa: api 500m + ui 100m + surge 500m + 100m = 1.2 -> 1500m
 #   prod:   3 api x 1 + 2 ui x 100m (HPA at max) + surge 1 + 100m = 4.3 -> 5
 # CPU limits are ceilings, not reservations; scheduling uses requests.cpu.
+# Phase 6 burst pods: only for the AWS node (nodeSelector + taint toleration), counted apart from
+# the home quotas. Never preempts anything.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: qwenops-burst }
+value: 0
+preemptionPolicy: Never
+globalDefault: false
+description: Pods on the AWS burst node (Phase 6). Counted by the "burst" quotas, not the home ones.
+---
+# AWS node: c6a.xlarge, 4 vCPU / 8 GB. 2 chat-api pods + 1 rolling-update surge.
+apiVersion: v1
+kind: ResourceQuota
+metadata: { name: burst, namespace: chatbot-prod }
+spec:
+  scopeSelector:
+    matchExpressions:
+      - { scopeName: PriorityClass, operator: In, values: [qwenops-burst] }
+  hard:
+    requests.cpu: 500m
+    requests.memory: 512Mi
+    limits.cpu: '3'
+    limits.memory: 1Gi
+    pods: '3'
+---
+# Ollama on the AWS node + its model-pull init container.
+apiVersion: v1
+kind: ResourceQuota
+metadata: { name: burst, namespace: ai }
+spec:
+  scopeSelector:
+    matchExpressions:
+      - { scopeName: PriorityClass, operator: In, values: [qwenops-burst] }
+  hard:
+    requests.cpu: '1'
+    requests.memory: 1536Mi
+    limits.cpu: '3'
+    limits.memory: 4608Mi
+    pods: '1'
+---
 apiVersion: v1
 kind: ResourceQuota
 metadata:
   name: quota
   namespace: chatbot-prod
 spec:
+  # Home pods only. Burst pods (priority class qwenops-burst, AWS node) have their own quota below,
+  # so bursting never eats into what the home server is allowed to use.
+  scopeSelector:
+    matchExpressions:
+      - { scopeName: PriorityClass, operator: NotIn, values: [qwenops-burst] }
   hard:
     requests.cpu: '1'
     requests.memory: 768Mi
@@ -48,6 +93,11 @@ metadata:
   name: quota
   namespace: ai
 spec:
+  # Home pods only. Burst pods (priority class qwenops-burst, AWS node) have their own quota below,
+  # so bursting never eats into what the home server is allowed to use.
+  scopeSelector:
+    matchExpressions:
+      - { scopeName: PriorityClass, operator: NotIn, values: [qwenops-burst] }
   hard:
     requests.cpu: '1'
     requests.memory: 1536Mi

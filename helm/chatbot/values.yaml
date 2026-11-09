@@ -38,6 +38,13 @@ ui:
 pdb:
   enabled: false
 
+# Phase 6 burst: extra chat-api pods on the AWS node (prod only). Never set by hand in values files:
+# scripts/06-deploy.sh turns it on while a burst node is Ready, scripts/13-burst.sh on bring-up.
+burst:
+  enabled: false
+  replicas: 2
+  ollamaUrl: http://ollama-burst.ai.svc.cluster.local:11434
+
 ingress:
   className: traefik
 

@@ -1,0 +1,77 @@
+#!/bin/bash
+# QwenOps burst node (Phase 6). Order: safety timers first, then WireGuard, AppArmor, k3s agent.
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# 1. Safety: power off (= terminate) after max lifetime, and after ${idle_minutes} idle minutes.
+shutdown -h +${max_minutes} "QwenOps burst: maximum lifetime reached"
+cat > /usr/local/sbin/burst-idle-check <<'CONF'
+#!/bin/sh
+# Every 5 minutes. Idle = 5-minute load average under 0.5 (4 vCPU; chat generation keeps it far above).
+STATE=/var/lib/burst-idle
+up=$(cut -d. -f1 /proc/uptime)
+[ "$up" -gt 1200 ] || exit 0                 # leave bring-up alone for 20 minutes
+load=$(cut -d' ' -f2 /proc/loadavg)
+if awk "BEGIN { exit !($load < 0.5) }"; then n=$(( $(cat $STATE 2>/dev/null || echo 0) + 1 )); else n=0; fi
+echo "$n" > $STATE
+if [ "$n" -ge ${idle_checks} ]; then
+  logger -t burst-idle "idle for ${idle_minutes} minutes: powering off"
+  shutdown -h now "QwenOps burst: idle"
+fi
+CONF
+chmod 755 /usr/local/sbin/burst-idle-check
+cat > /etc/systemd/system/burst-idle.service <<'CONF'
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/burst-idle-check
+CONF
+cat > /etc/systemd/system/burst-idle.timer <<'CONF'
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+[Install]
+WantedBy=timers.target
+CONF
+systemctl daemon-reload
+systemctl enable --now burst-idle.timer
+
+# 2. WireGuard. Home dials in, so no Endpoint here. Routes: the home tunnel address and the home
+#    k3s node's own IP (k3s API on 6443, flannel VXLAN), both only through the tunnel.
+apt-get update -q
+apt-get install -y -q wireguard-tools
+umask 077
+cat > /etc/wireguard/wg0.conf <<'CONF'
+[Interface]
+Address = 10.200.0.2/24
+ListenPort = 51820
+PrivateKey = ${aws_private_key}
+
+[Peer]
+PublicKey = ${home_public_key}
+AllowedIPs = 10.200.0.1/32, ${home_lan_ip}/32
+CONF
+umask 022
+systemctl enable --now wg-quick@wg0
+
+# 3. The AppArmor profile every chatbot pod asks for.
+cat > /etc/apparmor.d/k8s-chatbot <<'CONF'
+${apparmor_profile}
+CONF
+apparmor_parser -r -W /etc/apparmor.d/k8s-chatbot
+
+# 4. Images: "localhost:5000/..." comes from the home registry's read-only copy on the tunnel.
+mkdir -p /etc/rancher/k3s
+cat > /etc/rancher/k3s/registries.yaml <<'CONF'
+mirrors:
+  "localhost:5000":
+    endpoint: ["http://10.200.0.1:5000"]
+CONF
+
+# 5. k3s agent, same version as home. Only burst pods may run here (taint); they find it by label.
+#    It keeps retrying until home brings the tunnel up.
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='${k3s_version}' \
+  K3S_URL='https://${home_lan_ip}:6443' K3S_TOKEN='${k3s_token}' sh -s - agent \
+  --node-name qwenops-burst --node-ip 10.200.0.2 --flannel-iface wg0 \
+  --node-label qwenops.io/burst=true --node-label qwenops.io/cloud=aws \
+  --node-taint qwenops.io/burst=true:NoSchedule
+touch /var/run/burst-ready

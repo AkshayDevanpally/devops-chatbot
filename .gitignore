@@ -13,3 +13,5 @@ certs/
 sbom/
 .last-tag
 /backups/
+terraform.tfvars
+terraform/**/.build/
