@@ -16,6 +16,10 @@ Problems hit on 4–5 November 2026:
   from starting docker, and the Spot machine taken back after 7 minutes.
 - Issues 26–27 (9 November): three EC2 Fleet errors in a row, then a wrong check in `burst-test`. After that,
   Phase 6 passed 11 of 11 checks.
+- Issues 28–30 (9 November): off-site backups and the Pulse backups panel.
+- Issues 31–32 (9 November): phone alerts through ntfy.
+- Issues 33–34 (9 November): overload protection and its load test.
+- Issue 35 (9 November): the Pulse page doesn't open on a phone on the home Wi-Fi (open).
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -46,6 +50,14 @@ Problems hit on 4–5 November 2026:
 | 25 | Spot machine taken back after 7 minutes ("no Spot capacity"); 3 checks failed | AWS / Spot | Fixed (fleet over 10 types, 3 zones) |
 | 26 | EC2 Fleet refused three times: "minimum target capacity" (one wrong guess on the way) | Terraform / AWS | Fixed |
 | 27 | `burst-test` said "0 of 0" Postgres connections; the check compared addresses wrongly | Testing | Fixed |
+| 28 | "Back up now" answered "no password set" and "accepted" in turns: the old backup-ops pod kept serving | Backups / Kubernetes | Fixed |
+| 29 | Before S3 was set up, the off-site copy would hang 15 minutes on a missing secret | Backups | Fixed |
+| 30 | Manual backups didn't count as the last good backup | Backups | Fixed |
+| 31 | Mistakes while testing alerts: broken quoting twice, a lost test topic, my own tests used up the per-IP limit | Process / testing | Fixed |
+| 32 | ChatApiDown showed "pending" right after Prometheus restarted | Alerts | False alarm |
+| 33 | Load test: people about to be turned away first saw "you're in line" | App / overload | Fixed |
+| 34 | Load retests misled: same `-dirty` image tag reused, and an old pod still serving | Process / testing | Fixed |
+| 35 | Pulse page doesn't open on a phone on the home Wi-Fi | Network | Open (fix scripted, not applied) |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -716,3 +728,156 @@ chat_prod|10.42.2.4|t|TLSv1.3
 
 **Lesson:** when a check fails but a related signal (here, readiness) says the thing works, look at the raw data
 before touching the system. `inet` and `cidr` values need `host()` before comparing them as text.
+
+### Issue 28 — "Back up now" answered "no password set" and "accepted" in turns
+
+**Date:** 9 November 2026, first end-to-end test of the Pulse backups panel on dev.
+
+**Symptom:** right after setting a test admin password, three requests in a row gave different answers:
+
+```text
+wrong pw: {"detail":"manual backups are off (no admin password set)"}
+right pw: {"accepted":true}
+again:    {"detail":"manual backups are off (no admin password set)"}
+```
+
+**Cause:** setting the password restarts backup-ops. Its old pod (started without a password) kept answering for
+about 30 seconds next to the new one, because the service runs Python as process 1, which ignores SIGTERM by
+default: Kubernetes waited out the full 30-second grace period before killing it, and the Service sent requests to
+both pods in turn. `kubectl get pods` showed the old pod "Terminating" and the new one "Running".
+
+**Fix:** backup-ops (and later ntfy-bridge) exit at once on SIGTERM, and their Deployments use `strategy: Recreate`,
+so two copies with different settings (password, wrong-guess counters) never answer at the same time. The next
+restart took seconds and showed one pod.
+
+**Lesson:** a small Python (or shell) server as PID 1 needs its own SIGTERM handler. And state kept in a pod
+(counters, settings read at start) needs Recreate, not a rolling update.
+
+### Issue 29 — Before S3 was set up, the off-site copy would hang 15 minutes on a missing secret
+
+**Date:** 9 November 2026, same test.
+
+**Symptom:** "Back up now" ran the backup (10 s), then started the off-site copy, which stayed `Running 0/1`.
+
+**Cause:** the off-site job loads its S3 key from secret `offsite-s3` (`envFrom`). Before `make backup-offsite-setup`
+that secret doesn't exist, so the pod can't start (`CreateContainerConfigError`) and just waits, until the job's
+15-minute deadline. Meanwhile backup-ops waited on it too, and the panel showed "running".
+
+**Fix:** the secret is now `optional: true`, so the pod starts, and the script's first line stops it at once with
+`off-site copy is not set up yet: run 'make backup-offsite-setup'`. The stuck job was deleted. Retest: the chain
+ended in seconds with that message, visible in the run's log on Pulse.
+
+**Lesson:** a job that may run before its setup is done should start anyway and say what's missing, rather than
+hang where only `kubectl describe` shows why.
+
+### Issue 30 — Manual backups didn't count as the last good backup
+
+**Date:** 9 November 2026, found while adding the backup alerts.
+
+**Symptom:** none visible yet, but it would have been: after a "Back up now" (or `make backup-now`) the Pulse tile
+and the planned BackupOverdue alert still used the last *scheduled* backup's time.
+
+**Cause:** the status came from the CronJob's `status.lastSuccessfulTime`, which Kubernetes only updates for jobs the
+CronJob itself starts. Jobs created from it by hand don't change it.
+
+**Fix:** backup-ops takes the newest of the CronJob's time and the finish time of any successful job of that kind
+(scheduled or manual). The same value feeds the Pulse tile and the new `/metrics` for the alerts. Checked in
+Prometheus: backup and off-site copy showed 0.2 h old right after a manual run.
+
+**Lesson:** "last successful run" from a CronJob means "last successful *scheduled* run". Count manual runs yourself.
+
+### Issue 31 — Mistakes while testing alerts
+
+**Date:** 9 November 2026, installing the ntfy alerts.
+
+**What happened:**
+1. **Broken quoting in the status command.** `make alerts-status` failed with
+   `SyntaxError: unexpected character after line continuation character`: Python code inside bash single quotes
+   used `\"`, which bash passes on as-is. Fixed by not needing quotes inside the f-string.
+2. **Unquoted test alert text.** amtool warned that `--annotation=summary=Test alert ...` isn't valid for its new
+   label parser and fell back to the old one. The values are now quoted (`'summary="..."'`).
+3. **Lost the test topic.** The first delivery test created a throwaway ntfy topic in a shell variable, and the
+   read-back ran in a separate command, so the name was gone and the read-back showed nothing (the bridge had logged
+   `ntfy_status: 200`). The test was repeated with send and read-back in one command: the message was there.
+4. **Used up the per-IP limit.** During the backups test, a run of password attempts against dev used up chat-api's
+   limit (5 per 10 minutes per IP), so the "right password" got `too many attempts`. Not a bug (the limit worked),
+   but it cost a retest; the chain was then tested directly against backup-ops.
+
+**Lesson:** keep a test's setup, action and check in one command so nothing is lost between them, and count how
+many attempts a test spends against a rate limit before running it.
+
+### Issue 32 — ChatApiDown showed "pending" right after Prometheus restarted
+
+**Date:** 9 November 2026, right after `make alerts`.
+
+**Symptom:** `make alerts-status` listed `PENDING  ChatApiDown` although both prod pods were up.
+
+**Cause:** Prometheus had just restarted with empty data (it keeps 24 h in an emptyDir), so for its first rule
+evaluation there was no `up` series yet, and `absent(...)` was true. The rule's 2-minute `for:` stops this from
+firing. Seconds later Prometheus showed both prod pods with `up = 1`, and the rule went back to inactive.
+
+**Fix:** none needed: the `for:` delay is exactly what keeps a restart from paging anyone.
+
+**Lesson:** rules built on `absent()` always flicker after a restart; give them a `for:` longer than one scrape
+plus one evaluation.
+
+### Issue 33 — Load test: people about to be turned away first saw "you're in line"
+
+**Date:** 9 November 2026, first load test of overload protection on dev (1 slot, line of 2, 6 chats at once).
+
+**Symptom:** the result was right (1 streamed, 2 waited and were answered, 3 refused in 0.2 s), but the 3 refused
+ones received two events:
+
+```text
+chat 2: HTTP 200    0.2s  events=[meta,queued,error,] tokens=0 "error": "Busy right now: ..."
+```
+
+On the page that would flash "Busy right now, you're in line" and then "Busy right now ... try again".
+
+**Cause:** all 6 arrived at the same moment, so the quick "line full?" check before the stream passed for all of
+them. Inside the stream, the "queued" message was sent whenever the slot was taken, without checking whether the
+line still had room.
+
+**Fix:** "queued" is only sent when there is a place in line (`gate.must_wait() and not gate.full()`). Retest: the 3
+refused chats got only the "busy" message, in 0.2 s; with the line already full, a new chat got HTTP 503 with
+`Retry-After: 15` before any work.
+
+**Lesson:** test with requests that arrive at exactly the same moment, not one after another; that's when checks
+done at different times disagree.
+
+### Issue 34 — Load retests misled: same `-dirty` image tag reused, and an old pod still serving
+
+**Date:** 9 November 2026, retesting the fix for Issue 33.
+
+**What happened (two mistakes):**
+1. **Same tag, old image.** The rebuild of uncommitted code was tagged `439e734-dirty` again. Helm saw no change and
+   kept the pods, and with `imagePullPolicy: IfNotPresent` the node would have kept its cached image anyway. The
+   retest ran the old code and showed the old flash; the pod's start time (before the build) gave it away.
+2. **Tested during a rollout.** After rebuilding with a unique tag (`TAG=439e734-overload2 make build`), the next
+   run served all 6 chats with no "busy": the old pod was still finishing (5-second preStop) next to the new one, so
+   there were two slots and two lines.
+
+**Fix:** a unique tag for each manual rebuild of uncommitted code, and waiting until dev has exactly one API pod
+before testing. The third run matched the design: 1 streamed, 2 waited (9 s and 15 s), 3 refused in 0.2 s with no
+"in line" message.
+
+**Lesson:** after a deploy, check that the pods are new (age, image) and that the old ones are gone before reading
+a test result. `-dirty` tags are not unique: pass `TAG=` for every manual rebuild.
+
+### Issue 35 — Pulse page doesn't open on a phone on the home Wi-Fi
+
+**Date:** 9 November 2026. **Status: open** (fix written, not applied; paused at the owner's request).
+
+**Symptom:** on a phone connected to the home Wi-Fi, `https://chatbot.local/pulse/` doesn't open.
+
+**Cause (from the server side):** the names `chatbot.local`, `dev.chatbot.local`, `qa.chatbot.local` and
+`jenkins.chatbot.local` exist only in the server's own `/etc/hosts` (pointing at 127.0.0.1), so no other device can
+look them up. Phones resolve `.local` names over mDNS (Bonjour/zeroconf), and nothing announces them (avahi isn't
+installed). The site itself answers on the LAN address (`https://chatbot.local` via 192.168.1.101 returned 200 from
+the server). A phone also needs to trust the home CA, or it shows a certificate warning.
+
+**Planned fix:** `scripts/16-lan-access.sh` (`make lan-access`, sudo): avahi on the LAN interface only, announcing the
+four names with the current LAN address (re-announced if it changes), and ufw rules for 80/443 and mDNS (UDP 5353)
+from the home subnet only. `make lan-share-ca` serves only the public CA certificate on the LAN for 10 minutes for
+the phone to install. Not yet run or tested on a phone; the error the phone shows will confirm which part was
+missing.

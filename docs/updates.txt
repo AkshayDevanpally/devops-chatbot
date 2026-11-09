@@ -10,6 +10,8 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
+ 9   9 Nov 2026    Phone access on the home Wi-Fi (paused)             Open, script written, not run
+ 8   9 Nov 2026    Overload protection: busy fast, prod first          Done on dev, checks passed
  7   9 Nov 2026    Alerts to your phone through ntfy                   Done, checks passed
  6   9 Nov 2026    Backups: off-site S3 copy, Pulse panel, Back up now Done, checks passed
  5   9 Nov 2026    AWS cost guardrails: 10 USD budget + kill switch    Done, checks passed
@@ -21,6 +23,64 @@ SUMMARY
 
 DETAILS
 -------
+
+9. Phone access on the home Wi-Fi (paused)
+
+Date:        9 November 2026
+Commands:    make lan-access (sudo, once), make lan-share-ca (sudo), make lan-status
+             (scripts/16-lan-access.sh, not committed yet)
+Why:         the Pulse page didn't open on a phone on the home Wi-Fi.
+Found:       the site names only exist in the server's /etc/hosts; phones look up .local names
+             over mDNS and nothing announces them. The phone must also trust the home CA.
+Planned:     avahi announcing chatbot.local, dev., qa. and jenkins.chatbot.local on the LAN
+             interface only (re-announced if the server's address changes); ufw rules for
+             80/443 and mDNS from the home subnet only; the public CA certificate served on the
+             LAN for 10 minutes to install on the phone.
+Status:      open, paused at the owner's request. Not run, not tested. Issue 35.
+
+8. Overload protection: "busy" fast, prod first
+
+Date:        9 November 2026
+Why:         second layer of the "what happens at 100%" plan. Before, extra chats queued behind
+             Ollama (2 replies at a time) until they timed out after 120 s, with no word to the
+             user; and dev, qa and Jenkins competed with prod for memory on equal terms.
+Changed:     app-chat (ModelGate in main.py, config, 3 tests), app-ui/public/chat.js,
+             helm/chatbot (api.chat values, priorityClassName for prod API and UI),
+             k8s/platform/10-quotas.yaml (priority classes), 30-ollama.yaml, 40-postgres.yaml,
+             50-prometheus.yaml (platform priority, ChatsTurnedAway alert)
+
+Fail fast (chat-api, per pod):
+- 1 reply streamed at a time per pod, a line of 2 (dev, qa) or 4 (prod), 30 s wait at most.
+  All environments share one Ollama, so the totals stay close to its 2 replies at a time.
+- In line: the page shows "Busy right now, you're in line (N ahead)..." until the reply starts.
+- Line full: "Busy right now: lots of people are chatting. Try again in a moment." at once
+  (HTTP 503, Retry-After 15 s, before any database or model work); after 30 s in line, the
+  same message.
+- The slot is taken inside the stream and always given back, even if the page is closed
+  while waiting.
+- New metrics: outcome="busy" in chat_requests_total, and chat_waiting.
+- New alert ChatsTurnedAway (warning): over 10% of prod chats get "busy" for 5 minutes;
+  suggests make burst-up. 12 alert rules now.
+
+Prod first (priority classes):
+- qwenops-platform (1,000,000): Postgres, Ollama, Prometheus.
+- qwenops-prod (100,000): prod chat-api and UI.
+- dev, qa, Jenkins and backup jobs stay at the default (0): under memory pressure the kubelet
+  evicts them first (among pods using more than they asked for), and a prod pod that doesn't
+  fit may push them off the node. Burst pods keep qwenops-burst. The home quotas still count
+  every pod except burst ones.
+
+Tests:       18 unit tests pass (3 new: slot, line, refuse; giving up after the wait; leaving the
+             line early). make verify ENV=dev 25 of 25. Load test on dev, 6 chats at once:
+             1 streamed at once, 2 waited and were answered (9 s and 15 s), 3 got "busy" in
+             0.2 s; Prometheus counted 6 ok and 3 busy. With the line full, a new chat got
+             HTTP 503 with Retry-After. 12 rules loaded and healthy.
+Applied:     priority classes and platform pods (Postgres, Ollama, Prometheus restarted after a
+             backup; prod back to 2/2 within a minute). chat-api with the gate is on dev only.
+Fixed:       "in line" shown just before "busy" (Issue 33); misleading retests from a reused
+             image tag and an old pod still serving (Issue 34).
+Status:      done on dev. qa and prod get the gate, the messages and prod's priority with the
+             next pipeline run.
 
 7. Alerts to your phone through ntfy
 
