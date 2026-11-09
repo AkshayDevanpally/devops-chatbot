@@ -1,0 +1,17 @@
+# Certificate for the Raspberry Pi gateway's "waking up" page (pi/, scripts/18-pi-gateway.sh).
+# Used only while the server sleeps; when it's awake, the Pi passes TLS through and the server's own
+# certificates are used. Kept in cert-manager's namespace, next to the CA; copied to the Pi on install.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: pi-gateway-tls
+  namespace: cert-manager
+spec:
+  secretName: pi-gateway-tls
+  commonName: chatbot.local
+  dnsNames: [chatbot.local, dev.chatbot.local, qa.chatbot.local, jenkins.chatbot.local]
+  duration: 8760h          # 1 year; renewed 30 days early (re-run make pi-gateway to copy it over)
+  renewBefore: 720h
+  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
+  usages: [server auth, digital signature]
+  issuerRef: { name: chatbot-local-ca, kind: ClusterIssuer, group: cert-manager.io }

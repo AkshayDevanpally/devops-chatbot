@@ -1,4 +1,4 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore backup-offsite-setup backup-offsite-now backup-admin-password db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset alerts alerts-topic alerts-test alerts-status
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore backup-offsite-setup backup-offsite-now backup-admin-password db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset alerts alerts-topic alerts-test alerts-status lan-share-ca sleep-setup sleep-status sleep-now stay-awake allow-sleep wol-test pi-gateway pi-test pi-simulate pi-status
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
@@ -135,6 +135,39 @@ alerts-test:   ## send a test alert through the whole chain to your phone
 
 alerts-status: ## rules loaded, alerts firing now, last notifications sent
 	./scripts/15-alerts.sh status
+
+lan-share-ca:  ## sudo: serve the home CA certificate on the LAN for 10 min, to install on a phone or laptop
+	sudo ./scripts/16-lan-access.sh share-ca
+
+sleep-setup:   ## Phase 7, sudo: Wake-on-LAN on; sleep when idle 30 min; wake 07:50 IST for backups
+	sudo ./scripts/17-sleep.sh setup
+
+sleep-status:  ## would the server sleep now, and if not, why
+	./scripts/17-sleep.sh status
+
+sleep-now:     ## sudo: sleep right away; MINUTES=2 wakes it by itself after 2 min (else 07:50 IST or Wake-on-LAN)
+	sudo ./scripts/17-sleep.sh now $(MINUTES)
+
+wol-test:      ## sudo: find where Wake-on-LAN breaks (card setting, Wi-Fi->cable delivery, real wake ~3 min)
+	sudo ./scripts/17-sleep.sh wol-test
+
+stay-awake:    ## never sleep until allow-sleep
+	./scripts/17-sleep.sh stay-awake
+
+allow-sleep:   ## sleep when idle again
+	./scripts/17-sleep.sh allow-sleep
+
+pi-gateway:    ## Phase 7: set up the Raspberry Pi gateway (PI=user@ip; asks the Pi's sudo password)
+	./scripts/18-pi-gateway.sh install
+
+pi-test:       ## checks through the Pi: pass-through, names announced, waker sees the server
+	./scripts/18-pi-gateway.sh test
+
+pi-simulate:   ## pretend the server sleeps: waking page, redirect, magic packet (Pi's sudo password)
+	./scripts/18-pi-gateway.sh simulate
+
+pi-status:     ## Pi services and what the waker sees
+	./scripts/18-pi-gateway.sh status
 
 verify:        ## functional + security checks (ENV=dev|qa|prod)
 	./scripts/07-verify.sh $(or $(ENV),dev)
