@@ -1,0 +1,27 @@
+# Postgres server certificate from the local CA (Phase 5). Clients connect with sslmode=verify-full:
+# in the cluster by Service name, from AWS by the tunnel address 10.200.0.1.
+# The secret also holds ca.crt, which is all a client needs to check the certificate.
+# Postgres picks up renewals without a restart (tls-reload sidecar in k8s/platform/40-postgres.yaml).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: postgres-tls
+  namespace: data
+spec:
+  secretName: postgres-tls
+  commonName: postgres.data.svc.cluster.local
+  dnsNames:
+    - postgres.data.svc.cluster.local
+    - postgres.data.svc
+    - postgres.data
+    - postgres
+  ipAddresses:
+    - 10.200.0.1            # home end of the WireGuard tunnel
+  duration: 2160h           # 90 days
+  renewBefore: 720h         # renewed 30 days before expiry
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always  # new key on every renewal
+  usages: [server auth, digital signature]
+  issuerRef: { name: chatbot-local-ca, kind: ClusterIssuer, group: cert-manager.io }

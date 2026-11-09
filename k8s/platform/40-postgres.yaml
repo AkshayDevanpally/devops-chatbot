@@ -1,10 +1,31 @@
 # Local Postgres for all three environments. It stays here for good: AWS burst nodes (Phase 6)
 # reach it through the WireGuard tunnel (Phase 5), never a copy in AWS.
 # Secret `postgres-secrets` is created by scripts/05-secrets.sh, never committed.
+# TLS: secret `postgres-tls` comes from k8s/tunnel/10-postgres-tls.yaml (make db-tls). Postgres starts
+# without TLS until it exists, so `make platform` still works before cert-manager is installed.
 apiVersion: v1
 kind: ServiceAccount
 metadata: { name: postgres, namespace: data }
 automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: postgres-hba, namespace: data }
+data:
+  # Edits apply without a restart: the tls-reload sidecar reloads Postgres when this file changes.
+  pg_hba.conf: |
+    # TYPE   DATABASE  USER                        ADDRESS        METHOD
+    # Inside the Postgres pod only (startup scripts, probes, the reload sidecar).
+    local    all       all                                        trust
+    host     all       all                         127.0.0.1/32   trust
+    host     all       all                         ::1/128        trust
+    # AWS burst pods over the WireGuard tunnel: TLS required, app roles only, each to its own database.
+    hostssl  sameuser  chat_dev,chat_qa,chat_prod  10.200.0.0/24  scram-sha-256
+    host     all       all                         10.200.0.0/24  reject
+    # Pods in this cluster (k3s pod network).
+    host     all       all                         10.42.0.0/16   scram-sha-256
+    # Anything else.
+    host     all       all                         all            reject
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -50,8 +71,18 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
-          args: ["-c", "shared_buffers=256MB", "-c", "effective_cache_size=512MB", "-c", "max_connections=60",
-                 "-c", "password_encryption=scram-sha-256"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -- -c shared_buffers=256MB -c effective_cache_size=512MB -c max_connections=60 \
+                     -c password_encryption=scram-sha-256 -c hba_file=/etc/postgresql/hba/pg_hba.conf
+              if [ -s /etc/postgresql/tls/tls.crt ]; then
+                set -- "$@" -c ssl=on -c ssl_min_protocol_version=TLSv1.3 \
+                       -c ssl_cert_file=/etc/postgresql/tls/tls.crt -c ssl_key_file=/etc/postgresql/tls/tls.key
+              else
+                echo "postgres-tls secret not found: starting without TLS (run: make db-tls)"
+              fi
+              exec docker-entrypoint.sh postgres "$@"
           envFrom: [{ secretRef: { name: postgres-secrets } }]
           env:
             - { name: POSTGRES_USER, value: postgres }
@@ -76,10 +107,42 @@ spec:
             - { name: run, mountPath: /var/run/postgresql }
             - { name: tmp, mountPath: /tmp }
             - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            - { name: hba, mountPath: /etc/postgresql/hba, readOnly: true }
+            - { name: tls, mountPath: /etc/postgresql/tls, readOnly: true }
+        # cert-manager renews the certificate in place and pg_hba.conf can change; Postgres only reads
+        # either on reload. This checks every 5 minutes and reloads over the local socket when they change.
+        - name: tls-reload
+          image: postgres:16-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              sum() { cat /etc/postgresql/tls/tls.crt /etc/postgresql/hba/pg_hba.conf 2>/dev/null | sha256sum; }
+              last=$(sum)
+              while sleep 300; do
+                now=$(sum)
+                [ "$now" = "$last" ] && continue
+                if psql -h /var/run/postgresql -U postgres -Atqc 'select pg_reload_conf()' >/dev/null; then
+                  echo "certificate or pg_hba.conf changed: Postgres reloaded"; last=$now
+                fi
+              done
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits: { cpu: 50m, memory: 32Mi }
+          volumeMounts:
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: hba, mountPath: /etc/postgresql/hba, readOnly: true }
+            - { name: tls, mountPath: /etc/postgresql/tls, readOnly: true }
       volumes:
         - { name: run, emptyDir: {} }
         - { name: tmp, emptyDir: {} }
         - { name: init, configMap: { name: postgres-init, defaultMode: 0555 } }
+        - { name: hba, configMap: { name: postgres-hba } }
+        # Postgres refuses a key readable by others: owner root, group postgres (fsGroup 70), mode 0440.
+        - { name: tls, secret: { secretName: postgres-tls, optional: true, defaultMode: 0440 } }
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:
@@ -94,6 +157,18 @@ spec:
   selector: { app.kubernetes.io/name: postgres }
   ports: [{ name: pg, port: 5432, targetPort: pg }]
 ---
+# The address AWS burst pods use: the home end of the WireGuard tunnel (wg0 on this server).
+# Only packets arriving for 10.200.0.1:5432 match. "Local" keeps the caller's tunnel address, so
+# pg_hba.conf and the NetworkPolicy below can tell tunnel traffic apart.
+apiVersion: v1
+kind: Service
+metadata: { name: postgres-tunnel, namespace: data }
+spec:
+  selector: { app.kubernetes.io/name: postgres }
+  externalIPs: [10.200.0.1]
+  externalTrafficPolicy: Local
+  ports: [{ name: pg, port: 5432, targetPort: pg }]
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: postgres-allow, namespace: data }
@@ -104,4 +179,8 @@ spec:
     - from:
         - namespaceSelector: { matchLabels: { chatbot.io/tier: app } }
           podSelector: { matchLabels: { app.kubernetes.io/component: api } }
+      ports: [{ port: 5432 }]
+    # AWS burst pods through the WireGuard tunnel. Postgres still demands TLS + SCRAM from them.
+    - from:
+        - ipBlock: { cidr: 10.200.0.0/24 }
       ports: [{ port: 5432 }]

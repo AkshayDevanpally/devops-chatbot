@@ -1,4 +1,4 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore db-tls tunnel-up tunnel-test tunnel-down tunnel-status
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
@@ -69,6 +69,21 @@ backup-download: ## copy the newest backup to ./backups (STAMP=... for another o
 
 db-restore:    ## replace one env's database with a backup (ENV=dev|qa|prod STAMP=...)
 	./scripts/10-backups.sh restore $(ENV) $(STAMP)
+
+db-tls:        ## TLS for Postgres from the local CA + tunnel rules (Phase 5; needs make tls)
+	./scripts/11-db-tls.sh
+
+tunnel-up:     ## Phase 5 test: tiny AWS WireGuard endpoint + home wg0 (needs db-tls; costs ~1 cent/hour)
+	./scripts/12-tunnel.sh up
+
+tunnel-test:   ## check Postgres over the tunnel from the AWS side
+	./scripts/12-tunnel.sh test
+
+tunnel-down:   ## home wg0 down + destroy everything in AWS
+	./scripts/12-tunnel.sh down
+
+tunnel-status: ## AWS endpoint and wg0 state
+	./scripts/12-tunnel.sh status
 
 verify:        ## functional + security checks (ENV=dev|qa|prod)
 	./scripts/07-verify.sh $(or $(ENV),dev)

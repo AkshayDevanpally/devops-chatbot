@@ -275,6 +275,16 @@ To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` 
   and is provisioned with Terraform. When that capacity is no longer needed, **every AWS resource is destroyed**.
   Nothing in AWS holds data, so a single Terraform stack is enough and `terraform destroy` is always safe.
   Phase 5 is now the tunnel above (WireGuard config, Postgres TLS, the NetworkPolicy rule); Phase 6 the burst compute.
+  - **Phase 5 home side: done (2026-11-09), `make db-tls`.** Postgres has a certificate from the local CA
+    (`k8s/tunnel/10-postgres-tls.yaml`, 90 days, renewed and reloaded automatically) and requires TLS 1.3 when
+    TLS is used; the apps already connect over TLS. `pg_hba.conf` is now a ConfigMap: the tunnel subnet
+    `10.200.0.0/24` gets TLS + SCRAM, app roles only, each to its own database; the pod network keeps SCRAM;
+    everything else is rejected. Service `postgres-tunnel` answers on the tunnel address `10.200.0.1:5432`.
+    AWS clients use `sslmode=verify-full sslrootcert=certs/postgres-ca.crt`.
+  - **Phase 5 tunnel test: passed (2026-11-09), `make tunnel-up` / `tunnel-test` / `tunnel-down`.** Terraform in
+    `terraform/tunnel/` makes a t4g.nano WireGuard endpoint (own VPC, WireGuard from the home IP only, no SSH, SSM
+    for commands); the home server dials out with `wg0` (sudo steps are printed). 7 of 7 checks passed from AWS.
+    Details: `docs/updates.txt`.
 
 - **Ollama version:** pinned to `ollama/ollama:0.30.10`. Check https://github.com/ollama/ollama/releases and bump it in `k8s/platform/30-ollama.yaml` and `.env`.
 - **TLS:** done in Phase 3.4 with a local CA. HSTS is 1 day (`tls.hstsSeconds`); raise it once certificates come from a public CA (e.g. Let's Encrypt in AWS).

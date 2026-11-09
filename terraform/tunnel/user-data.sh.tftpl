@@ -1,0 +1,42 @@
+#!/bin/bash
+# WireGuard via systemd-networkd (built into Amazon Linux 2023, no extra package), plus a Postgres
+# client for the tunnel test. The home server dials in, so no Endpoint is set for the peer here.
+set -euo pipefail
+umask 077
+
+cat > /etc/systemd/network/90-wg0.netdev <<'CONF'
+[NetDev]
+Name=wg0
+Kind=wireguard
+
+[WireGuard]
+PrivateKey=${aws_private_key}
+ListenPort=51820
+
+[WireGuardPeer]
+PublicKey=${home_public_key}
+AllowedIPs=10.200.0.1/32
+CONF
+chown root:systemd-network /etc/systemd/network/90-wg0.netdev
+chmod 0640 /etc/systemd/network/90-wg0.netdev
+
+cat > /etc/systemd/network/90-wg0.network <<'CONF'
+[Match]
+Name=wg0
+
+[Network]
+Address=10.200.0.2/24
+CONF
+chmod 0644 /etc/systemd/network/90-wg0.network
+
+umask 022
+cat > /etc/postgres-ca.crt <<'CONF'
+${postgres_ca}
+CONF
+
+systemctl restart systemd-networkd
+# t4g.nano has 512 MB: dnf gets OOM-killed without swap (seen on the first run).
+dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+dnf install -y -q postgresql16
+touch /var/run/tunnel-ready
