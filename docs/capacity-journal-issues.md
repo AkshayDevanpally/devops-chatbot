@@ -24,6 +24,8 @@ Problems hit on 4–5 November 2026:
   address, names that weren't really announced, a reload loop after waking, Windows going around the Pi, and
   slips in the new scripts.
 - Issue 42 (9 November): a test sleep that ended by itself after 30 seconds.
+- Issues 43–46 (9 November): Phase 8, the live Pipeline page and real "Be a Dev" deploys: a security scan
+  failure in the Jenkins image, a new job missing after a restart, a test that lost its cookie, and slips while testing.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -69,6 +71,10 @@ Problems hit on 4–5 November 2026:
 | 40 | Mistakes in the new sleep and Pi scripts, caught before they ran | Process | Fixed |
 | 41 | The server's network link runs at 100 Mb/s instead of 1 Gb/s | Hardware | Noted |
 | 42 | First `make alert-test` woke after ~30 s instead of 5 min, with no wake packet | Hardware / sleep | Noted (cause not found) |
+| 43 | `make jenkins` stopped by Trivy: new HIGH findings in the Jenkins base image (apt, zlib) | CI / security | Fixed |
+| 44 | New Jenkins job `theme-deploy` missing after the restart, although job-dsl created it | CI / Jenkins | Fixed |
+| 45 | Rate-limit test got 409 instead of 429: the error response dropped the visitor cookie | Tests | Fixed |
+| 46 | Mistakes while testing Phase 8 (curl brackets, quoting, wrong stage id, sed miss, early check) | Process | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -1100,3 +1106,95 @@ the feature it tested works, and a too-early wake only means the server is awake
 
 **Next step if it repeats:** before sleeping, check `cat /sys/class/rtc/rtc0/wakealarm` and
 `grep enabled /proc/acpi/wakeup`, and clear old alarms with `echo 0 | sudo tee /sys/class/rtc/rtc0/wakealarm`.
+
+
+### Issue 43 — `make jenkins` stopped by Trivy: new HIGH findings in the Jenkins base image
+
+**Date:** 9 November 2026, first `make jenkins` for Phase 8 (adding the `matrix-auth` plugin).
+
+**Symptom:** the image built, then the scan step refused it:
+
+```text
+jenkins/jenkins:<pinned> (debian 13)
+Total: 3 (HIGH: 3, CRITICAL: 0)
+apt      3.0.3   CVE-2026-109518  HIGH
+zlib1g   ...     CVE-2026-76844   HIGH
+zlib1g   ...     CVE-2026-85091   HIGH
+```
+
+**Cause:** the same as Issue 15. The pinned base image is unchanged, but fixes for these packages were published in Debian
+after it was built. Our scan blocks on HIGH, so a rebuild that passed last week now fails.
+
+**Fix:** `ci/jenkins/Dockerfile` now runs `apt-get update && apt-get upgrade -y --no-install-recommends` as root (and
+cleans the apt lists), with `# hadolint ignore=DL3005` explaining why. The rescan was clean and the rollout went
+through.
+
+**Lesson:** every image built here on a Debian base should take the Debian updates at build time; the pin keeps the
+Jenkins version fixed, not the OS packages.
+
+
+### Issue 44 — New Jenkins job `theme-deploy` missing after the restart
+
+**Date:** 9 November 2026, after `make jenkins` rolled out the new configuration.
+
+**Symptom:** `https://jenkins.chatbot.local/job/theme-deploy/` returned 404, and the job list only had `chatbot`.
+The Jenkins log showed the job being created, then the job list being loaded again:
+
+```text
+... createOrUpdateConfig for theme-deploy
+... Loaded all jobs
+```
+
+The job's `config.xml` was on disk in `/var/jenkins_home/jobs/theme-deploy/`.
+
+**Cause:** at start-up, the configuration-as-code plugin ran the job-dsl script (which wrote `theme-deploy`) before
+Jenkins finished loading jobs from disk. The later "load all jobs" step replaced the job list in memory with the one it
+read at the start, which didn't include the new job yet. Existing jobs are not affected, so it only shows up when a
+job is added.
+
+**Fix:** `scripts/09-jenkins.sh` has a new "==> jobs" step. After the rollout it checks, from inside the Jenkins pod as
+admin, that `chatbot` and `theme-deploy` both answer. If one is missing it calls `POST /reload` (with a crumb), then
+prints each job's status code. On this run: reload, then both 200.
+
+**Lesson:** after adding a job in the JCasC file, check that it is really there; the install script now does this.
+
+
+### Issue 45 — Rate-limit test got 409 instead of 429: the error response dropped the visitor cookie
+
+**Date:** 9 November 2026, writing `app-chat/tests/test_pipeline.py`.
+
+**Symptom:** the test sent two colour requests and expected the second to get 429 ("one colour change per 5 minutes").
+It got 409 instead:
+
+```text
+FAILED tests/test_pipeline.py::test_theme_rate_limited - assert 409 == 429
+```
+
+**Cause:** the visitor id (`uid` cookie) is set on the response. The first request was answered with 409 (the fake
+pipeline-events said "busy"), and an `HTTPException` builds a new response, so the cookie set on the original one
+was lost. The second request had no cookie, counted as a new visitor, and got "busy" again. The limit itself was
+fine.
+
+**Fix:** the test now checks the two cases separately: "busy" gives 409, and the 5-minute limit is tested after a
+successful 202, which does keep the cookie. 23 tests pass. A real browser gets its cookie from the page's earlier
+requests, so it wasn't affected (the live test got 202, then 429).
+
+
+### Issue 46 — Mistakes while testing Phase 8
+
+**Date:** 9 November 2026. None of these reached the cluster; each one cost a rerun.
+
+- **curl brackets again (as in Issue 8):** listing jobs with `...api/json?tree=jobs[name]` returned nothing, because curl
+  treats `[]` as a URL pattern. Fixed with `curl -g`.
+- **Quoting slip again (as in Issue 31):** a Python one-liner with escaped quotes inside a single-quoted bash string,
+  used to list the Trivy findings, failed with a syntax error. Redone with a quoted heredoc (`<<'EOF'`), which is the
+  rule from now on.
+- **Wrong stage id:** the first log fetch for "stage 7" returned "(no output yet)". Stage ids in Jenkins are node ids,
+  not positions (build #21: 8, 31, 49, 68, 86, 106, 125, 144). With the real ids every stage log came back
+  (25 to 167 lines).
+- **sed didn't match:** changing the "add jenkins.chatbot.local to your hosts file" message in `scripts/09-jenkins.sh`
+  with sed matched nothing, because the text sits in a heredoc split over two lines, not an `echo`. Fixed by editing
+  the lines directly.
+- **Agent looked offline:** right after the Jenkins restart the build agent showed as offline. The check came too
+  early: the agent reconnected on its own at 16:10:31.
+

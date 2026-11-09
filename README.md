@@ -16,11 +16,13 @@ browser ─HTTPS─► Traefik ingress (k3s, cert from cert-manager) ──► u
 | Path | What |
 |---|---|
 | `app-chat/` | FastAPI chat API, DB schema with retention triggers, tests, Dockerfile |
-| `app-ui/` | Chat page, CI/CD factory page (demo), "Be a Dev" colour page, **Pulse** live dashboard, **Architecture** diagrams (`/architecture/`), nginx image |
+| `app-ui/` | Chat page, **Pipeline** page (live Jenkins runs and logs), "Be a Dev" colour page (real deploys to dev), **Pulse** live dashboard, **Architecture** diagrams (`/architecture/`), nginx image |
 | `compose.yaml` | Quick test with Docker before Kubernetes |
 | `monitoring/` | Prometheus config for the Compose test |
 | `Jenkinsfile` | CI/CD pipeline: checkout → build → test → scan → SBOM + push → dev → qa → approved prod |
 | `ci/jenkins/`, `k8s/ci/` | Jenkins controller image (plugins baked in) and its k3s manifests + deployer RBAC |
+| `ci/theme-deploy.Jenkinsfile`, `scripts/19-theme.sh` | The "Be a Dev" colour deploy job (validate → deploy dev → verify) |
+| `ci/pipeline-events/` | Small read-mostly bridge: the Pipeline page's view of Jenkins (runs, stages, redacted logs) |
 | `k8s/tls/` | cert-manager namespace + policies, local CA, Traefik HTTP→HTTPS redirect |
 | `k8s/platform/` | Namespaces (PSA restricted), quotas, default-deny network policies, Ollama, Postgres, Prometheus |
 | `helm/chatbot/` | App chart + `values-dev/qa/prod.yaml` |
@@ -156,7 +158,39 @@ How it's kept safe:
   It is in the `docker` group, which is root-equivalent on this host, so the job only builds this repo's
   own `master` branch. Never point it at untrusted code or pull requests from forks.
 - **Deploys**: ServiceAccount `ci/jenkins-deployer` can only manage the chart's resources in the three app
-  namespaces (`k8s/ci/10-deployer-rbac.yaml`); prod also needs a human approval.
+  namespaces (`k8s/ci/10-deployer-rbac.yaml`); prod also needs a human approval, and only `admin` can give it.
+- **Accounts** (`matrix-auth`): `admin` does everything. `pipeline-viewer` (used by pipeline-events) can read
+  jobs and builds and start a job, nothing else: no Manage Jenkins, no script console, no deleting, no prod approval.
+
+### Live Pipeline page and "Be a Dev" (Phase 8)
+
+```
+browser ──► chat-api ──► pipeline-events (ns ci) ──► Jenkins
+ /pipeline/   /api/pipeline       user pipeline-viewer      jobs: chatbot, theme-deploy
+ /dev/        /api/pipeline/log   redacts secrets in logs
+              /api/theme          one colour deploy at a time
+```
+
+- **Pipeline page** (`/pipeline/`): the last 5 runs of the delivery pipeline (`chatbot`) or of the colour
+  deploys (`theme-deploy`, button "Colour deploys" or `?job=theme-deploy`). Stages light up as Jenkins runs
+  them, a banner shows when a build waits for the prod approval, and clicking a stage opens its log (last
+  400 lines, secrets redacted). It checks every 3 s while something runs, every 10 s otherwise. If Jenkins
+  can't be reached it falls back to the old demo build.
+- **Be a Dev** (`/dev/`): picking a colour starts the `theme-deploy` job, which checks the colour against the
+  allowed list (teal, indigo, rose, amber, emerald, slate), saves it in ConfigMap `chatbot-theme` in
+  `chatbot-dev`, runs `helm upgrade --reuse-values --set theme=…` on **dev only**, and checks
+  `https://dev.chatbot.local/theme.json`. The page then jumps to the live run (~40 s). Limits: one change per
+  visitor every 5 minutes, and a new request is refused (409) while a colour deploy is queued or running.
+  Pipeline deploys keep the chosen colour (`scripts/06-deploy.sh` reads the ConfigMap).
+- Security: chat-api has no Jenkins access; it only talks to pipeline-events, which only chat-api can reach and
+  which can only reach Jenkins (NetworkPolicies). Job names, build and stage numbers are checked before they
+  are passed on.
+- `make jenkins` installs pipeline-events too, creates the `pipeline-viewer` password in `jenkins-secrets`, and
+  reloads Jenkins once if a newly added job is missing.
+
+```bash
+./scripts/19-theme.sh show               # dev's chosen colour, when and by which build
+```
 
 ## Pulse — the live dashboard (`/pulse/`)
 
@@ -204,6 +238,8 @@ kubectl get pods -A                      # everything
 kubectl top pods -A                      # RAM/CPU per pod (metrics-server is built into k3s)
 kubectl -n chatbot-dev describe quota    # how full each environment is
 helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n chatbot-prod
+./scripts/19-theme.sh show               # dev's "Be a Dev" colour
+kubectl -n ci logs deploy/pipeline-events  # the Pipeline page's link to Jenkins
 ```
 
 ## Overload protection
@@ -411,6 +447,6 @@ To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` 
 
 - **Ollama version:** pinned to `ollama/ollama:0.30.10`. Check https://github.com/ollama/ollama/releases and bump it in `k8s/platform/30-ollama.yaml` and `.env`.
 - **TLS:** done in Phase 3.4 with a local CA. HSTS is 1 day (`tls.hstsSeconds`); raise it once certificates come from a public CA (e.g. Let's Encrypt in AWS).
-- **Pipeline page** runs a demo build; its stations match the Jenkinsfile stages, and Phase 8 connects it to live Jenkins events. Image signing (cosign + an admission check) is a follow-up to the SBOM step. **Colour page** validates and rate-limits now; Phase 8 makes it trigger the `theme-deploy` job.
+- **Pipeline page and Be a Dev (Phase 8, done 2026-11-09):** the Pipeline page shows live Jenkins runs and logs, and the colour page starts real `theme-deploy` runs on dev (see *Live Pipeline page and "Be a Dev"*). Still open: image signing (cosign + an admission check) as a follow-up to the SBOM step.
 - **Wake-on-LAN (Phase 7, done):** the Raspberry Pi gateway answers `/api/wake` and `/api/status` while the server
   sleeps and sends the magic packet on the home network; no AWS (SQS) part was needed. See *Sleep and wake*.

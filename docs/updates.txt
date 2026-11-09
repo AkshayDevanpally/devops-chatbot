@@ -10,6 +10,7 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
+ 13  9 Nov 2026    Phase 8: live Pipeline page, real Be a Dev deploys  Done, checks passed
  12  9 Nov 2026    Server-down alerts from the Pi                      Done, checks passed
  11  9 Nov 2026    Phase 7: Raspberry Pi gateway, wake on visit        Done, checks passed
  10  9 Nov 2026    Phase 7: sleep when idle, Wake-on-LAN, IST times    Done, checks passed
@@ -26,6 +27,61 @@ SUMMARY
 
 DETAILS
 -------
+
+13. Phase 8: live Pipeline page and real "Be a Dev" colour deploys
+
+Date:        9 November 2026
+Commands:    make jenkins (now also installs pipeline-events and the pipeline-viewer account),
+             ./scripts/19-theme.sh show (dev's chosen colour)
+Pages:       https://<env>.chatbot.local/pipeline/  (?job=theme-deploy for colour deploys)
+             https://dev.chatbot.local/dev/         (Be a Dev)
+Why:         the Pipeline page only played a demo build, and the colour page only checked the
+             colour. Both now show and drive the real Jenkins.
+Changed:     ci/pipeline-events/ (new), k8s/ci/30-pipeline-events.yaml (new),
+             ci/theme-deploy.Jenkinsfile (new), scripts/19-theme.sh (new), k8s/ci/20-jenkins.yaml,
+             k8s/ci/00-namespace.yaml, ci/jenkins/ (matrix-auth, Debian updates), Jenkinsfile,
+             scripts/06-deploy.sh, scripts/09-jenkins.sh, app-chat (3 endpoints, 5 tests),
+             helm/chatbot (env + network rule), app-ui/public/pipeline/, app-ui/public/dev/
+
+How it works:
+- pipeline-events is a small service in the ci namespace. It logs in to Jenkins as
+  pipeline-viewer and turns Jenkins' run data into a simple list: the last 5 runs, each with
+  its stages, status, timing, commit, colour and whether it waits for the prod approval.
+  It also returns a stage's log (last 400 lines) with passwords, tokens and keys blanked out.
+- chat-api passes three calls through to it: GET /api/pipeline, GET /api/pipeline/log and
+  POST /api/theme. It checks job names and numbers first. chat-api itself has no Jenkins
+  login.
+- The Pipeline page polls every 3 s while a build runs and every 10 s otherwise, lights the
+  stations as stages finish, shows a "waiting for approval" banner, and opens a stage's log
+  on click. If Jenkins can't be reached it plays the old demo.
+- Be a Dev: choosing a colour starts the theme-deploy job: Validate (one of teal, indigo,
+  rose, amber, emerald, slate), Deploy dev (saves the colour in ConfigMap chatbot-theme, then
+  helm upgrade --reuse-values --set theme=<colour>), Verify (theme.json over HTTPS). The page
+  then opens the live run. Only dev changes; qa and prod keep their own colours.
+- Pipeline deploys to dev read chatbot-theme, so a chosen colour isn't undone by the next push.
+
+Security:
+- Jenkins now uses matrix-auth. admin: everything. pipeline-viewer: read jobs and builds,
+  start a build; refused for Manage Jenkins, the script console and deleting jobs (tested:
+  403). Anonymous: nothing.
+- Prod approval accepts admin only (submitter: 'admin'), so the viewer account can never ship.
+- Network: only chat-api pods can reach pipeline-events, and pipeline-events can only reach
+  Jenkins. Its pod runs as non-root with a read-only filesystem and no Kubernetes token.
+- Limits: one colour change per visitor every 5 minutes (429), and none while a colour deploy
+  is queued or running (409). The CI quota went from 2 to 3 pods for the new service.
+- The Jenkins image gets Debian updates when built, which cleared 3 new HIGH findings (apt,
+  zlib) from the Trivy scan.
+
+Result:      - pipeline build #22 (commit ca0a64e) ran all 8 stages live on the page; it
+               waited at Ship to prod until admin approved ("Approved by admin"), then
+               deployed prod.
+             - theme-deploy #1 (rose), started from the site: Checkout, Validate, Deploy
+               dev, Verify in about 40 s; dev's theme.json then said "rose". A second
+               request straight after got 429.
+             - every stage log of build #21 opened through the site (25 to 167 lines).
+             - a bad job name is refused (422) before it reaches pipeline-events.
+             - chat-api tests: 23 passed; make verify ENV=dev: 25 of 25.
+Issues:      Issues 43-46 in docs/capacity-journal-issues.md
 
 12. Server-down alerts from the Pi
 
