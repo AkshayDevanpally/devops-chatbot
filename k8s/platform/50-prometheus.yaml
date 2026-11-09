@@ -69,6 +69,14 @@ data:
     global:
       scrape_interval: 15s
       scrape_timeout: 10s
+      evaluation_interval: 30s
+
+    # Alerts (rules in alerts.yml below) go to Alertmanager, which sends them to your phone through
+    # ntfy (k8s/platform/55-alerting.yaml, make alerts).
+    rule_files: [/etc/prometheus/alerts.yml]
+    alerting:
+      alertmanagers:
+        - static_configs: [{ targets: ["alertmanager.monitoring.svc.cluster.local:9093"] }]
 
     scrape_configs:
       # Request, chat and token metrics from every chat-api pod.
@@ -119,6 +127,109 @@ data:
           - source_labels: [__name__]
             regex: machine_(cpu_cores|memory_bytes)
             action: keep
+
+      # Backup health from backup-ops (last success and last result per kind), for the alerts.
+      - job_name: backup-ops
+        scrape_interval: 60s
+        static_configs: [{ targets: ["backup-ops.data.svc.cluster.local:8080"] }]
+
+  # Each alert says what is wrong and what to do. Home numbers exclude AWS burst nodes (cloud="aws").
+  alerts.yml: |
+    groups:
+      - name: home-server
+        rules:
+          - alert: HostMemoryCritical
+            expr: sum(node_memory_working_set_bytes{cloud!="aws"}) / sum(machine_memory_bytes{cloud!="aws"}) > 0.9
+            for: 5m
+            labels: { severity: critical }
+            annotations:
+              summary: "Home server memory above 90% ({{ $value | humanizePercentage }})"
+              description: "Kubernetes starts evicting pods below 300 MB free. Check Pulse > Pods; consider make burst-up."
+          - alert: HostCpuSaturated
+            expr: sum(rate(node_cpu_usage_seconds_total{cloud!="aws"}[5m])) / sum(machine_cpu_cores{cloud!="aws"}) > 0.9
+            for: 15m
+            labels: { severity: warning }
+            annotations:
+              summary: "Home server CPU above 90% for 15 minutes ({{ $value | humanizePercentage }})"
+              description: "Chats get slower. If prod is at 3/3 API pods, bursting to AWS helps (make burst-up)."
+      - name: prod-chat
+        rules:
+          - alert: ChatApiDown
+            expr: absent(up{job="chat-api",namespace="chatbot-prod"} == 1)
+            for: 2m
+            labels: { severity: critical }
+            annotations:
+              summary: "No prod chat-api pod is up"
+              description: "The chatbot is down. Check: kubectl -n chatbot-prod get pods; make logs ENV=prod."
+          - alert: ChatsFailing
+            expr: |
+              sum(rate(chat_requests_total{namespace="chatbot-prod",outcome="model_error"}[5m]))
+                / sum(rate(chat_requests_total{namespace="chatbot-prod",outcome!="rate_limited"}[5m])) > 0.05
+            for: 5m
+            labels: { severity: critical }
+            annotations:
+              summary: "{{ $value | humanizePercentage }} of prod chats fail"
+              description: "The model errors or times out. Check Ollama: kubectl -n ai logs deploy/ollama."
+          - alert: ServerErrors
+            expr: |
+              sum(rate(http_requests_total{namespace="chatbot-prod",status_class="5xx"}[5m]))
+                / sum(rate(http_requests_total{namespace="chatbot-prod"}[5m])) > 0.05
+            for: 5m
+            labels: { severity: critical }
+            annotations:
+              summary: "{{ $value | humanizePercentage }} of prod requests return 5xx"
+              description: "Check: make logs ENV=prod."
+          - alert: BurstRecommended
+            expr: |
+              count(up{job="chat-api",namespace="chatbot-prod",pod!~"chat-api-burst-.*"} == 1) >= 3
+              and histogram_quantile(0.95, sum by (le) (rate(chat_first_token_seconds_bucket{namespace="chatbot-prod"}[5m]))) > 15
+            for: 5m
+            labels: { severity: warning }
+            annotations:
+              summary: "Prod is at its home limit (3/3 API pods) and the first word takes over 15 s"
+              description: "Add AWS capacity: make burst-up (about 0.05-0.08 USD an hour; it stops itself when idle)."
+          - alert: ModelSaturated
+            expr: sum(chat_active_streams{namespace="chatbot-prod"}) > 2
+            for: 5m
+            labels: { severity: warning }
+            annotations:
+              summary: "More than 2 prod chats streaming for 5 minutes: a queue is forming"
+              description: "Ollama answers 2 at a time. Expect slow replies; consider make burst-up."
+      - name: backups
+        rules:
+          - alert: BackupOpsDown
+            expr: absent(up{job="backup-ops"} == 1)
+            for: 10m
+            labels: { severity: warning }
+            annotations:
+              summary: "backup-ops is down: backup status and alerts are blind"
+              description: "Check: kubectl -n data get pods -l app.kubernetes.io/name=backup-ops; make backups."
+          - alert: BackupFailed
+            expr: backup_last_run_failed == 1
+            for: 1m
+            labels: { severity: warning }
+            annotations:
+              summary: "The last {{ $labels.kind }} run failed"
+              description: "Open Pulse > Backups and expand the failed run to read its log."
+          - alert: BackupOverdue
+            expr: |
+              (time() - backup_last_success_timestamp_seconds{kind="backup"}) > 26 * 3600
+              or (time() - backup_last_success_timestamp_seconds{kind="offsite"}) > 84 * 3600
+              or (time() - backup_last_success_timestamp_seconds{kind="restore-test"}) > 8 * 86400
+            for: 10m
+            labels: { severity: warning }
+            annotations:
+              summary: "No successful {{ $labels.kind }} for too long"
+              description: "Backup older than 26 h, off-site copy older than 3.5 days, or restore test older than 8 days. See Pulse > Backups."
+      - name: aws
+        rules:
+          - alert: BurstNodeRunningLong
+            expr: count(machine_cpu_cores{cloud="aws"}) > 0
+            for: 4h
+            labels: { severity: warning }
+            annotations:
+              summary: "An AWS burst node has been running for over 4 hours"
+              description: "It costs money while it runs. If it isn't needed: make burst-down."
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -200,6 +311,15 @@ spec:
         - namespaceSelector: { matchLabels: { chatbot.io/tier: app } }
           podSelector: { matchLabels: { app.kubernetes.io/component: api } }
       ports: [{ port: 9100 }]
+    # Send alerts to Alertmanager.
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: alertmanager } }
+      ports: [{ port: 9093 }]
+    # Backup health from backup-ops.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: data } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: backup-ops } }
+      ports: [{ port: 8080 }]
     # Kubernetes API (discovery) and the kubelet (resource metrics). Both listen on the
     # node's own IP, so allow only those ports, only to private ranges.
     - to:

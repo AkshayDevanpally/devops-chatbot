@@ -1,0 +1,177 @@
+# Alerts to your phone: Prometheus rules (alerts.yml in 50-prometheus.yaml) -> Alertmanager (groups,
+# repeats, "resolved" messages) -> ntfy-bridge (readable text) -> ntfy.sh -> the ntfy app.
+# Installed with `make alerts`; the topic is secret ntfy (make alerts-topic). Test: make alerts-test.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: alertmanager-config, namespace: monitoring }
+data:
+  alertmanager.yml: |
+    route:
+      receiver: phone
+      group_by: [alertname]
+      group_wait: 30s        # collect alerts that fire together into one message
+      group_interval: 5m
+      repeat_interval: 4h    # still firing: remind every 4 h
+      routes:
+        - matchers: ['severity="critical"']
+          receiver: phone
+          repeat_interval: 1h
+    receivers:
+      - name: phone
+        webhook_configs:
+          - url: http://ntfy-bridge.monitoring.svc.cluster.local:8080/alert
+            send_resolved: true
+            max_alerts: 10
+    inhibit_rules:           # a critical alert hides the warning of the same name
+      - source_matchers: ['severity="critical"']
+        target_matchers: ['severity="warning"']
+        equal: [alertname]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: alerting, namespace: monitoring }
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels: { app.kubernetes.io/name: alertmanager }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app.kubernetes.io/name: alertmanager } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: alertmanager }
+    spec:
+      serviceAccountName: alerting
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+        appArmorProfile: { type: Localhost, localhostProfile: k8s-chatbot }
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.34.1
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+            - --cluster.listen-address=     # single instance: no gossip port
+            - --web.listen-address=:9093
+          ports: [{ name: http, containerPort: 9093 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 96Mi }
+          readinessProbe:
+            httpGet: { path: /-/ready, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /-/healthy, port: http }
+            periodSeconds: 30
+          volumeMounts:
+            - { name: config, mountPath: /etc/alertmanager, readOnly: true }
+            - { name: data, mountPath: /alertmanager }
+      volumes:
+        - name: config
+          configMap: { name: alertmanager-config }
+        - name: data
+          emptyDir: { sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: alertmanager, namespace: monitoring }
+spec:
+  selector: { app.kubernetes.io/name: alertmanager }
+  ports: [{ name: http, port: 9093, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntfy-bridge
+  namespace: monitoring
+  labels: { app.kubernetes.io/name: ntfy-bridge }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app.kubernetes.io/name: ntfy-bridge } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ntfy-bridge }
+    spec:
+      serviceAccountName: alerting
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+        appArmorProfile: { type: Localhost, localhostProfile: k8s-chatbot }
+      containers:
+        - name: ntfy-bridge
+          image: python:3.13.17-alpine3.24
+          command: ["python", "-I", "-u", "/app/ntfy_bridge.py"]
+          envFrom: [{ secretRef: { name: ntfy, optional: true } }]   # NTFY_TOPIC (+ NTFY_SERVER, NTFY_TOKEN)
+          env:
+            - { name: CLICK_URL, value: "https://chatbot.local/pulse/" }
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 5m, memory: 24Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          volumeMounts:
+            - { name: code, mountPath: /app, readOnly: true }
+      volumes:
+        - name: code
+          configMap: { name: ntfy-bridge-code }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ntfy-bridge, namespace: monitoring }
+spec:
+  selector: { app.kubernetes.io/name: ntfy-bridge }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: alertmanager-allow, namespace: monitoring }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: alertmanager } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } } }]
+      ports: [{ port: 9093 }]
+  egress:
+    - to: [{ podSelector: { matchLabels: { app.kubernetes.io/name: ntfy-bridge } } }]
+      ports: [{ port: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: ntfy-bridge-allow, namespace: monitoring }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: ntfy-bridge } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: alertmanager } } }]
+      ports: [{ port: 8080 }]
+  egress:
+    # ntfy over HTTPS, public addresses only.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports: [{ protocol: TCP, port: 443 }]

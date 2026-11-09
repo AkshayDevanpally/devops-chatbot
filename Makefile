@@ -1,4 +1,4 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore backup-offsite-setup backup-offsite-now backup-admin-password db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore backup-offsite-setup backup-offsite-now backup-admin-password db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset alerts alerts-topic alerts-test alerts-status
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
@@ -123,6 +123,18 @@ guardrails-status: ## spend this month, budget action state, deny policy attache
 
 guardrails-reset: ## after a cut-off: give the Terraform user its create rights back
 	./scripts/14-guardrails.sh reset
+
+alerts:        ## alerts to your phone via ntfy: Alertmanager, ntfy-bridge, rules (install/update)
+	./scripts/15-alerts.sh install
+
+alerts-topic:  ## show the private ntfy topic to subscribe to (NEW=1 makes a new one)
+	./scripts/15-alerts.sh topic $(if $(NEW),--new,)
+
+alerts-test:   ## send a test alert through the whole chain to your phone
+	./scripts/15-alerts.sh test
+
+alerts-status: ## rules loaded, alerts firing now, last notifications sent
+	./scripts/15-alerts.sh status
 
 verify:        ## functional + security checks (ENV=dev|qa|prod)
 	./scripts/07-verify.sh $(or $(ENV),dev)

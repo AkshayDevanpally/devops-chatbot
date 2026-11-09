@@ -6,6 +6,7 @@ This service may only read the backup CronJobs, start Jobs from them and read th
 
     GET  /status            schedules, last/next runs, recent runs
     GET  /logs?job=NAME     last 300 log lines of one backup-related job
+    GET  /metrics           backup health for Prometheus (alerts)
     POST /run               {"password": "..."}: backup now, then the off-site copy
 
 Standard library only, so it runs on a plain python image with nothing to build.
@@ -123,20 +124,46 @@ def next_run(schedule: str, now: datetime) -> str | None:
 def status() -> dict:
     now = datetime.now(UTC)
     out: dict = {"manual_enabled": bool(PASSWORD)}
+    runs = sorted((job_summary(j) for j in backup_jobs()), key=lambda r: r["started"] or "", reverse=True)
     for name, kind in KINDS.items():
         cj = cronjob(name)
         if cj is None:
             out[kind.replace("-", "_")] = {"configured": False}
             continue
         st = cj.get("status", {})
+        # The CronJob only records scheduled successes; a manual run ("Back up now") counts too.
+        done = [r["finished"] for r in runs if r["kind"] == kind and r["status"] == "succeeded" and r["finished"]]
+        last_success = max([t for t in (st.get("lastSuccessfulTime"), *done) if t], default=None)
+        finished = [r for r in runs if r["kind"] == kind and r["status"] != "running"]
         out[kind.replace("-", "_")] = {
             "configured": True, "schedule": cj["spec"]["schedule"], "suspended": cj["spec"].get("suspend", False),
-            "last_scheduled": st.get("lastScheduleTime"), "last_success": st.get("lastSuccessfulTime"),
+            "last_scheduled": st.get("lastScheduleTime"), "last_success": last_success,
+            "last_failed": bool(finished) and finished[0]["status"] == "failed",
             "next": None if cj["spec"].get("suspend") else next_run(cj["spec"]["schedule"], now)}
-    runs = sorted((job_summary(j) for j in backup_jobs()), key=lambda r: r["started"] or "", reverse=True)
     out["runs"] = runs[:12]
     out["running"] = any(r["status"] == "running" and r["kind"] in ("backup", "offsite") for r in runs)
     return out
+
+
+def metrics() -> str:
+    """Prometheus text format. Timestamps are Unix seconds; 0 = never."""
+    def ts(iso: str | None) -> float:
+        return datetime.fromisoformat(iso).timestamp() if iso else 0   # Python 3.11+ reads the Z
+
+    st = status()
+    lines = ["# HELP backup_configured 1 if the CronJob for this kind exists.", "# TYPE backup_configured gauge",
+             "# HELP backup_last_success_timestamp_seconds Last successful run (scheduled or manual).",
+             "# TYPE backup_last_success_timestamp_seconds gauge",
+             "# HELP backup_last_run_failed 1 if the newest finished run failed.", "# TYPE backup_last_run_failed gauge",
+             "# HELP backup_running 1 while a backup or off-site copy runs.", "# TYPE backup_running gauge"]
+    for kind in KINDS.values():
+        info = st[kind.replace("-", "_")]
+        lines.append(f'backup_configured{{kind="{kind}"}} {int(info["configured"])}')
+        if info["configured"]:
+            lines.append(f'backup_last_success_timestamp_seconds{{kind="{kind}"}} {ts(info["last_success"]):.0f}')
+            lines.append(f'backup_last_run_failed{{kind="{kind}"}} {int(info["last_failed"])}')
+    lines.append(f"backup_running {int(st['running'])}")
+    return "\n".join(lines) + "\n"
 
 
 def job_log(name: str) -> str:
@@ -233,6 +260,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"ok": True})
             if self.path == "/status":
                 return self.reply(200, status())
+            if self.path == "/metrics":
+                data = metrics().encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                return self.wfile.write(data)
             m = re.fullmatch(r"/logs\?job=([a-z0-9-]{1,63})", self.path)
             if m:
                 return self.reply(200, {"job": m.group(1), "log": job_log(m.group(1))})

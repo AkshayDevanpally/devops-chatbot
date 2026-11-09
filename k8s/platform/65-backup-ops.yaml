@@ -101,6 +101,11 @@ spec:
         - namespaceSelector: { matchLabels: { chatbot.io/tier: app } }
           podSelector: { matchLabels: { app.kubernetes.io/component: api } }
       ports: [{ port: 8080 }]
+    # Prometheus reads /metrics (backup health, for the alerts).
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+      ports: [{ port: 8080 }]
   egress:
     # Kubernetes API only (it listens on the node's own IP).
     - to:
