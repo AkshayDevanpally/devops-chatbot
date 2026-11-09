@@ -203,6 +203,26 @@ kubectl -n chatbot-dev describe quota    # how full each environment is
 helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n chatbot-prod
 ```
 
+## Alerts to your phone (ntfy)
+
+```bash
+make alerts          # install/update: Alertmanager, ntfy-bridge and the alert rules
+make alerts-topic    # your private ntfy topic + how to subscribe (NEW=1 makes a new one)
+make alerts-test     # send a test alert through the whole chain
+make alerts-status   # rules loaded, alerts firing now, last notifications sent
+```
+
+Prometheus checks 11 rules (`alerts.yml` in `k8s/platform/50-prometheus.yaml`) and sends what fires to
+Alertmanager, which groups alerts, reminds every 4 h (critical: every hour) and sends "Resolved" when they clear.
+A small `ntfy-bridge` turns them into readable phone notifications on ntfy.sh (`k8s/platform/55-alerting.yaml`).
+
+- **Critical:** home server memory > 90%, no prod chat-api up, > 5% of prod chats failing, > 5% of prod requests 5xx.
+- **Warning:** burst recommended (prod at 3/3 home pods and first word > 15 s), model queue forming, CPU > 90% for
+  15 min, a backup/off-site copy/restore test failed or overdue, backup-ops down, AWS burst node up > 4 h.
+- The topic name is the only protection on ntfy.sh: keep it private (it lives in secret `ntfy`).
+- **Limit:** alerts run on the home server, so if the whole server is down nothing can alert you. An outside
+  heartbeat check would close that gap.
+
 ## Backups (Postgres)
 
 ```bash

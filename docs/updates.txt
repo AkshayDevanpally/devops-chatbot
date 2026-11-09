@@ -10,6 +10,7 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
+ 7   9 Nov 2026    Alerts to your phone through ntfy                   Done, checks passed
  6   9 Nov 2026    Backups: off-site S3 copy, Pulse panel, Back up now Done, checks passed
  5   9 Nov 2026    AWS cost guardrails: 10 USD budget + kill switch    Done, checks passed
  4   9 Nov 2026    Phase 6 burst compute                               Done, checks passed
@@ -20,6 +21,69 @@ SUMMARY
 
 DETAILS
 -------
+
+7. Alerts to your phone through ntfy
+
+Date:        9 November 2026
+Commands:    make alerts (install/update), alerts-topic (NEW=1 for a new topic), alerts-test,
+             alerts-status (scripts/15-alerts.sh)
+Why:         backups, burst nodes and the home server could all fail quietly; the only way to
+             notice was to look. First layer of the "what happens at 100%" plan.
+Decided:     ntfy (free phone push, no account): the app subscribes to a private topic.
+Changed:     k8s/platform/50-prometheus.yaml (rule_files, alerting, alerts.yml, backup-ops
+             scrape, network rules), k8s/platform/55-alerting.yaml (new: Alertmanager,
+             ntfy-bridge, network rules), k8s/platform/ntfy-bridge/ntfy_bridge.py (new),
+             k8s/platform/backup-ops/backup_ops.py (/metrics, manual runs count),
+             k8s/platform/65-backup-ops.yaml (Prometheus may scrape it),
+             k8s/platform/10-quotas.yaml (monitoring quota), scripts/15-alerts.sh, Makefile
+
+How it works:
+- Prometheus evaluates 11 rules every 30 s and sends firing alerts to Alertmanager
+  (prom/alertmanager:v0.34.1, single instance, no gossip port).
+- Alertmanager groups alerts by name (waits 30 s, so alerts that fire together arrive as one
+  message), repeats every 4 h (critical: every 1 h), sends "Resolved" when they clear, and
+  hides a warning while a critical alert of the same name fires.
+- Alertmanager has no ntfy receiver (checked with amtool: "field ntfy_configs not found"), and
+  its webhook JSON would arrive on the phone as raw JSON. ntfy-bridge (stdlib Python, like
+  backup-ops) turns each group into one message: title "CRITICAL: Name" / "WARNING: Name" /
+  "Resolved: Name", the summary plus what to do, ntfy priority 5 (critical), 4 (warning) or
+  2 (resolved), and an emoji tag. Tapping it opens the Pulse page (home network only).
+- The topic (qwenops- plus 24 random hex characters) is secret ntfy in the monitoring
+  namespace. On ntfy.sh anyone with the name can read it, so it must stay private.
+- Network rules: only Prometheus may reach Alertmanager, only Alertmanager may reach the
+  bridge, and the bridge may only reach public HTTPS.
+
+The 11 rules:
+- critical: HostMemoryCritical (> 90% for 5 min), ChatApiDown (no prod chat-api up for
+  2 min), ChatsFailing (> 5% of prod chats error, 5 min), ServerErrors (> 5% of prod
+  requests 5xx, 5 min);
+- warning: BurstRecommended (prod at 3/3 home API pods and first-word p95 > 15 s, 5 min),
+  ModelSaturated (> 2 chats streaming for 5 min), HostCpuSaturated (> 90% for 15 min),
+  BackupFailed, BackupOverdue (backup > 26 h, off-site copy > 3.5 days, restore test
+  > 8 days), BackupOpsDown (10 min), BurstNodeRunningLong (AWS node up > 4 h).
+- Home numbers leave out AWS burst nodes (cloud!="aws"); burst pods don't count toward the
+  3/3 home limit.
+
+Backup health: backup-ops now has /metrics (last success time, last run failed, running, per
+kind), scraped every 60 s. A manual "Back up now" now counts as a success; before, only the
+CronJob's own "last successful" time was used, so the Pulse tile ignored manual backups.
+
+Tests:       promtool: 11 rules, config valid; amtool: Alertmanager config valid; server dry
+             runs pass. After install: 11 rules loaded and healthy, 1 Alertmanager connected,
+             backup metrics present (backup and off-site copy 0.2 h old, restore test 4.3 h).
+             Delivery: test alerts went through Alertmanager and the bridge to ntfy.sh and
+             were read back from it ("WARNING: QwenOpsTest2", priority 4, warning tag), using
+             throwaway topics that were then deleted.
+Fixed:       - right after Prometheus restarted, ChatApiDown showed "pending" for about 30 s
+               (no scrape yet; the rule's 2-minute wait kept it from firing). It cleared on
+               its own: noted, no change;
+             - the status command's Python had broken quoting inside bash single quotes;
+             - amtool warned that the test's annotation values weren't quoted for its new
+               parser; they are now.
+Limits:      if the whole server is down, nothing can alert (the alerts run on it); an outside
+             heartbeat would close that. No alerts for crash-looping pods yet (needs
+             kube-state-metrics).
+Status:      done. The owner creates the private topic (make alerts-topic) and subscribes.
 
 6. Backups: off-site copy to S3, Pulse panel and "Back up now"
 
