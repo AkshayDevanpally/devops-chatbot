@@ -11,6 +11,11 @@ Problems hit on 4–5 November 2026:
 - Issue 19: setting up nightly Postgres backups (on the server, 14 days, weekly restore test).
 - Issue 20 (9 November): Phase 5 home side, TLS for Postgres and the tunnel rules (see docs/updates.txt).
 - Issue 21 (9 November): Phase 5 tunnel test against a small AWS node (see docs/updates.txt).
+- Issue 22 (9 November): first `make burst-up` (Phase 6) stopped with exit code 141.
+- Issues 23–25 (9 November): the next Phase 6 runs: a setting AWS refuses for Spot, AppArmor stopping `wg-quick`
+  from starting docker, and the Spot machine taken back after 7 minutes.
+- Issues 26–27 (9 November): three EC2 Fleet errors in a row, then a wrong check in `burst-test`. After that,
+  Phase 6 passed 11 of 11 checks.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -35,6 +40,12 @@ Problems hit on 4–5 November 2026:
 | 19 | First backup job: "Connection refused" from Postgres | Backups / network | Fixed |
 | 20 | Postgres TLS check: "Connection refused" from inside the Postgres pod | Testing / network | Fixed |
 | 21 | Tunnel test: AWS node setup did not finish (dnf OOM-killed), then a false handshake failure | AWS / testing | Fixed |
+| 22 | First `make burst-up` stopped with exit code 141 while making the join token | Scripts | Fixed |
+| 23 | `burst-up`: AWS refused "terminate on shutdown" for a Spot instance | Terraform / AWS | Fixed |
+| 24 | `burst-up`: AppArmor stopped `wg-quick` from starting the registry copy (exit 126) | Host OS / AppArmor | Fixed |
+| 25 | Spot machine taken back after 7 minutes ("no Spot capacity"); 3 checks failed | AWS / Spot | Fixed (fleet over 10 types, 3 zones) |
+| 26 | EC2 Fleet refused three times: "minimum target capacity" (one wrong guess on the way) | Terraform / AWS | Fixed |
+| 27 | `burst-test` said "0 of 0" Postgres connections; the check compared addresses wrongly | Testing | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -503,3 +514,205 @@ NetworkPolicy depend on. Third run: 7 of 7 passed.
 
 **Lesson:** size even a throwaway node for the tools it installs, and make each check depend only on tools that
 are known to be on the machine it runs on.
+
+### Issue 22 — First `make burst-up` stopped with exit code 141 while making the join token
+
+**Date:** 9 November 2026, first run of `make burst-up` (Phase 6).
+
+**Symptom:** the script stopped right after its second step, with no error message of its own:
+
+```text
+==> cluster side: priority class, burst quotas, Prometheus cloud label
+==> keys and a one-hour join token
+make: *** [Makefile:92: burst-up] Error 141
+```
+
+**Cause:** a mistake in the script. Exit code 141 is 128 + 13, a process killed by SIGPIPE. The random parts of the
+k3s join token were made with `tr -dc 'a-z0-9' </dev/urandom | head -c 6`. `head` exits after 6 characters and
+closes the pipe; `tr` is still writing, so the kernel kills it with SIGPIPE. That is normal for this idiom, but the
+script runs with `set -o pipefail`, which reports the pipeline as failed, and `set -e` then ends the script.
+
+**Impact:** none. It stopped before the token Secret was created and before Terraform ran, so nothing was left in
+the cluster or in AWS (checked: no secret labelled `qwenops.io/burst=true`, no Terraform state).
+
+**Fix:** the two values now come from `openssl rand -hex 3` and `openssl rand -hex 8`, which need no pipe. Hex
+digits fit the bootstrap token format (`[a-z0-9]{6}.[a-z0-9]{16}`), checked before the rerun. No other line in
+`scripts/13-burst.sh` pipes into `head`.
+
+**Lesson:** under `set -o pipefail`, don't pipe an endless producer (`/dev/urandom`, `yes`, `cat` of a stream) into
+`head`. Use a command that makes exactly what is needed (`openssl rand`), or read a fixed number of bytes
+(`head -c 16 /dev/urandom | ...` with `head` first).
+
+### Issue 23 — `burst-up`: AWS refused "terminate on shutdown" for a Spot instance
+
+**Date:** 9 November 2026, second run of `make burst-up` (Phase 6).
+
+**Symptom:** Terraform created the Spot instance, then failed 50 seconds later:
+
+```text
+Error: modifying EC2 Instance (i-034e9ba04b2391954) InstanceInitiatedShutdownBehavior attribute:
+api error UnsupportedOperation: Modifying 'instanceInitiatedShutdownBehavior' is not supported for spot instances.
+```
+
+**Cause:** a mistake in the Terraform. `instance_initiated_shutdown_behavior = "terminate"` was set so the idle and
+max-lifetime timers' `shutdown` ends billing. For Spot, the AWS provider sets that attribute in a second call after
+launch, and AWS refuses it. It isn't needed: a one-time Spot instance always terminates on shutdown. Checked on the
+instance that was created: `describe-instance-attribute` returned `terminate`.
+
+**Impact:** the instance kept running (about half a cent) and Terraform marked it as failed ("tainted"), so the
+next run would replace it. The join token from the run stayed in the cluster until it expired.
+
+**Fix:** the attribute is set only for on-demand (`var.spot ? null : "terminate"`). It now lives in the launch
+template (Issue 25), with the same rule.
+
+**Lesson:** for Spot, check which instance settings AWS accepts. `terraform validate` can't catch it; only a real
+apply (or the AWS docs) does.
+
+### Issue 24 — `burst-up`: AppArmor stopped `wg-quick` from starting the registry copy
+
+**Date:** 9 November 2026, third run of `make burst-up`.
+
+**Symptom:** the AWS node was created, then bringing up `wg0` at home failed and rolled itself back:
+
+```text
+[#] docker run -d --rm --name registry-tunnel -p 10.200.0.1:5000:5000 ... registry:2
+/usr/bin/wg-quick: line 296: /usr/bin/docker: Permission denied
+[#] ip link delete dev wg0
+make: *** [Makefile:92: burst-up] Error 126
+```
+
+**Cause:** the read-only registry copy was started from `wg0.conf`'s `PostUp` line, which `wg-quick` runs as root.
+Ubuntu ships an AppArmor profile for `wg-quick` (`/etc/apparmor.d/wg-quick`), and it doesn't allow running `docker`.
+The kernel log showed it:
+
+```text
+apparmor="DENIED" operation="exec" class="file" profile="wg-quick" name="/usr/bin/docker" ... comm="wg-quick"
+```
+
+Root being refused is the hint: plain file permissions never stop root, AppArmor does. Exit code 126 means
+"found but not allowed to run".
+
+**Fix:** the profile was left alone (it's a sensible limit). `scripts/13-burst.sh` now starts the registry copy
+itself, as the user (who is in the `docker` group), right after `wg0` is up, and removes it before `wg0` goes down.
+The `PostUp`/`PreDown` lines are gone from the generated `wg0.conf`. The AWS node from that run was kept: the
+already-written `wg0.conf` was cleaned, `sudo wg-quick up wg0` and `make burst-ready` finished the bring-up, and the
+node joined.
+
+**Lesson:** on Ubuntu 25.10+, many system tools run under their own AppArmor profiles. Keep hooks like `PostUp` to
+networking commands; run anything else from the script that calls `wg-quick`. When root gets "Permission denied",
+check `journalctl -k | grep DENIED` first.
+
+### Issue 25 — Spot machine taken back after 7 minutes; three checks failed
+
+**Date:** 9 November 2026, first `make burst-test`.
+
+**Symptom:** seven checks passed and three failed:
+
+```text
+PASS  AWS node joined and Ready
+PASS  node labelled cloud=aws
+PASS  node tainted: burst pods only
+PASS  ollama-burst ready on the AWS node
+PASS  chat-api-burst pods ready on the AWS node (db + model reachable)
+FAIL  burst pods' Postgres connections: 0 of 0 over TLS
+FAIL  no answer from ollama-burst
+PASS  only burst pods on the AWS node
+PASS  burst pods use the burst quota, not prod's
+FAIL  Capacity page shows the AWS node (got 'False', want 'True')
+```
+
+At the same moment `make burst-status` showed the AWS machine as `shutting-down`.
+
+**Cause:** AWS took the Spot machine back. It launched at 08:33:18 UTC and was terminated at 08:40:30:
+
+```text
+Server.SpotInstanceTermination: Spot instance termination
+instance-terminated-no-capacity: Your Spot instance was terminated because there is no Spot capacity available
+that matches your request.
+```
+
+Our own timers were not involved: the boot log showed the max-lifetime shutdown set for 14:33, and the idle check
+waits 20 minutes after boot. The request allowed exactly one type (c6a.xlarge) in one zone (ap-south-1a), so when
+that pool ran short there was nowhere else to go. The three failures came after the machine was already gone; the
+node still showed "Ready" because Kubernetes takes about 40 seconds to notice a lost node.
+
+**What the 7 minutes proved:** the node joined k3s over the tunnel with the right labels and taint, and all three
+burst pods became ready. Their readiness check needs Postgres at home and the AWS Ollama, so pod traffic between
+home and AWS (flannel VXLAN inside WireGuard) works, which was the main risk in the design.
+
+**Fix:**
+- the node now comes from an **EC2 Fleet** (`type = "instant"`) instead of one `aws_instance`: a launch template
+  plus 10 allowed types (c6a, m6a, c5a, m5a, m5, c5, c7i, m6i, c6i, m7i `.xlarge`, all amd64 with 4 vCPU, 0.051 to
+  0.081 USD an hour as Spot) in **all three zones** (one subnet each), with AWS's `price-capacity-optimized`
+  strategy. AWS's Spot placement score for this mix is 9 of 10 in every zone (one type in one zone is what failed).
+- `make burst-status` shows which type and zone AWS picked.
+- `make burst-test` now first checks that the AWS machine is still running, and if not prints why (for example the
+  Spot message above) instead of three confusing failures.
+- clean-up: `make burst-down` removed the dead node, the burst pods, `wg0` and everything in AWS.
+
+**Lesson:** a Spot request should always allow several types and zones; a single pool can run dry at any time.
+And a test should check its foundation first (is the machine there?) before checking what runs on it.
+
+### Issue 26 — EC2 Fleet refused three times: "minimum target capacity"
+
+**Date:** 9 November 2026, the first three `make burst-up` runs after switching to an EC2 Fleet (Issue 25).
+
+**Symptom:** each run created the network and launch template, then the fleet failed:
+
+```text
+1st and 2nd run:
+api error InvalidParameterCombination: The minimum target capacity is only available with single instance fleets
+or single AZ fleets.
+3rd run:
+api error InvalidParameterValue: Theminimum target capacity should be larger than or equal to 1.
+```
+
+**Cause:** the fleet allows 10 instance types in 3 zones and set no minimum capacity. But the AWS provider always
+sends a minimum target capacity in the fleet's Spot (and on-demand) settings block, 0 when it isn't set. AWS accepts
+that field only from a fleet marked "single instance type" or "single zone", and only when it is at least 1. The
+plan doesn't show it (zero values are hidden), and `aws ec2 create-fleet --dry-run` passed every variant tried, so
+only a real apply showed the error.
+
+**What happened on the way (a mistake):**
+1. **Wrong guess.** After the first error, the on-demand settings block (present even for Spot) was blamed and made
+   to appear only for on-demand. That was not checked against anything; the second run failed the same way.
+2. **Checked instead of guessed.** `terraform providers schema -json` showed that the Spot block also has
+   `min_target_capacity`, so it was the Spot block sending 0. Setting `single_instance_type = true` got past the
+   first rule, and the third run hit the second rule (minimum must be at least 1).
+3. **Both settings.** Now both blocks set `single_instance_type = true` and `min_target_capacity = 1`.
+
+**Why that's fine:** the fleet asks for exactly one machine. "Single instance type" and "at least 1" then mean
+"one machine or none"; AWS still picks it from all 10 types and 3 zones. The next run got a c6i.xlarge in
+ap-south-1b. The network and launch template from the failed runs were reused, so nothing was left behind.
+
+**Lesson:** when an API error names a field you never set, look at what the tool actually sends (the provider
+schema, or `TF_LOG=DEBUG`) before changing code. One check replaced two rounds of guessing. Dry runs check
+permissions, not every rule.
+
+### Issue 27 — `burst-test` said "0 of 0" Postgres connections; the check compared addresses wrongly
+
+**Date:** 9 November 2026, `make burst-test` after the fleet worked.
+
+**Symptom:** ten checks passed and one failed:
+
+```text
+FAIL  burst pods' Postgres connections: 0 of 0 over TLS
+PASS  model on the AWS node answers a burst pod ("hello! how can I help you today?")
+```
+
+But the burst pods were ready, and their readiness check needs Postgres.
+
+**Cause:** a mistake in the test. It matched `pg_stat_activity.client_addr::text` against the pod IPs. `client_addr`
+is a Postgres `inet` value, and as text it includes the mask: `10.42.2.3/32`, never equal to `10.42.2.3`. Postgres
+had the connections all along:
+
+```text
+chat_prod|10.42.2.3|t|TLSv1.3
+chat_prod|10.42.2.4|t|TLSv1.3
+```
+
+**Fix:** the check uses `host(client_addr)`, which gives the bare address. Rerun: **11 of 11 passed**, including
+"burst pods use Postgres at home over TLS (2 connections)".
+
+**Lesson:** when a check fails but a related signal (here, readiness) says the thing works, look at the raw data
+before touching the system. `inet` and `cidr` values need `host()` before comparing them as text.

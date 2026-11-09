@@ -249,8 +249,9 @@ make tunnel-status      # AWS node and wg0 state
 make tunnel-down        # wg0 down + destroy everything in AWS
 ```
 
-**Burst compute (Phase 6).** A Spot c6a.xlarge (~$0.05/h) joins k3s and runs extra prod chat-api pods with
-their own Ollama. It destroys itself after 30 idle minutes or 6 hours:
+**Burst compute (Phase 6).** One Spot machine (4 vCPU amd64, picked by an EC2 Fleet from 10 types in 3 zones,
+$0.05–0.08/h) joins k3s and runs extra prod chat-api pods with their own Ollama. It destroys itself after 30 idle
+minutes or 6 hours:
 
 ```bash
 make burst-prepare      # once, sudo: firewall rules on wg0 for the burst node
