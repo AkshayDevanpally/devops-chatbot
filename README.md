@@ -227,19 +227,25 @@ make sleep-status          # would it sleep now, and if not, why
 make sleep-now MINUTES=2   # sudo: sleep now and wake by itself after 2 min (without MINUTES: 07:50 IST or a visit)
 make stay-awake            # never sleep until: make allow-sleep
 make wol-test              # sudo: test each link (card setting, Wi-Fi -> cable delivery, a real wake by the Pi)
+make alert-test            # sudo: sleep 5 min WITHOUT telling the Pi; the phone gets "server down", then "back"
 
 make pi-gateway            # set up / update the Pi (PI=user@ip, default rasppi@192.168.1.104; Pi's sudo password)
 make pi-test               # 11 checks through the Pi
 make pi-simulate           # pretend the server sleeps: waking page, magic packet (Pi's sudo password)
-make pi-status
+make pi-status             # Pi services, the waker, and what the watcher sees
+make pi-quiet MINUTES=30   # planned reboot / BIOS work: no "server down" alert from the Pi meanwhile
 make lan-share-ca          # sudo: serve the home CA for 10 min, to install on a phone or laptop
 ```
 
 - **Idle** means 30 minutes with no app traffic (chats, Pulse, any `/api` call), no Jenkins build, no backup job, no
   AWS burst node, no SSH session (VS Code Remote counts, so it never sleeps under you) and no stay-awake switch.
   It stays awake 07:45–10:00 IST for the backup, restore test and off-site copy (times in `/etc/qwenops-sleep.conf`).
-- Before sleeping it sends a quiet ntfy note. A Wake-on-LAN phone app also works: MAC `f8:bc:12:89:34:5f`,
-  broadcast `192.168.1.255`, port 9.
+- Before sleeping it sends a quiet ntfy note and tells the Pi (with a token from secret `pi-gateway`). A Wake-on-LAN
+  phone app also works: MAC `f8:bc:12:89:34:5f`, broadcast `192.168.1.255`, port 9.
+- **Server-down alerts from the Pi:** the Pi checks the server every 30 s and sends urgent ntfy alerts for
+  "Server is down (not asleep)" (3 min without an answer and no announced sleep), "didn't wake on schedule"
+  (10 min after the planned wake), "didn't wake after a visit" (5 min after the wake packet), then "Server is back".
+  Run `make pi-quiet` before planned reboots.
 - **BIOS (Dell OptiPlex 3020, F2):** Wake on LAN = LAN Only, Deep Sleep Control = Disabled, Block Sleep off,
   Auto On Time off; AC Recovery = Last Power State is a good idea.
 - **Needs:** fixed addresses for the server and the Pi (DHCP reservations; re-run `make pi-gateway` if they change),
@@ -264,8 +270,8 @@ A small `ntfy-bridge` turns them into readable phone notifications on ntfy.sh (`
 - **Warning:** burst recommended (prod at 3/3 home pods and first word > 15 s), model queue forming, CPU > 90% for
   15 min, a backup/off-site copy/restore test failed or overdue, backup-ops down, AWS burst node up > 4 h.
 - The topic name is the only protection on ntfy.sh: keep it private (it lives in secret `ntfy`).
-- **Limit:** alerts run on the home server, so if the whole server is down nothing can alert you. An outside
-  heartbeat check would close that gap.
+- **If the whole server is down,** these alerts can't run; the Raspberry Pi watches it instead and alerts
+  "Server is down (not asleep)" (see *Sleep and wake*).
 
 ## Backups (Postgres)
 

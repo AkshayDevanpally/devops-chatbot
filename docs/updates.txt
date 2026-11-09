@@ -10,6 +10,7 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
+ 12  9 Nov 2026    Server-down alerts from the Pi                      Done, checks passed
  11  9 Nov 2026    Phase 7: Raspberry Pi gateway, wake on visit        Done, checks passed
  10  9 Nov 2026    Phase 7: sleep when idle, Wake-on-LAN, IST times    Done, checks passed
  9   9 Nov 2026    Phone access on the home Wi-Fi                      Done, passed via the Pi
@@ -25,6 +26,58 @@ SUMMARY
 
 DETAILS
 -------
+
+12. Server-down alerts from the Pi
+
+Date:        9 November 2026
+Commands:    make pi-gateway (update the Pi), make pi-quiet MINUTES=30 (planned work),
+             make pi-status (now shows what the watcher sees), make alert-test (sudo: sleep
+             5 min without telling the Pi, to test the alert end to end)
+Why:         the alerts (update 7) run on the server, so if the server crashes, loses power or
+             its cable comes out, nothing can tell you. Now that it sleeps and wakes, "down"
+             can also be normal, so the watcher must tell a planned sleep from a failure.
+Changed:     pi/gateway/waker.py (watcher, alerts, LAN port 8082), pi/setup.sh (settings file
+             root-only, state kept across restarts), scripts/18-pi-gateway.sh (token, topic,
+             checks, quiet), scripts/17-sleep.sh (tells the Pi before sleeping, alert-test),
+             Makefile
+
+How it works:
+- Every 30 s the Pi checks whether the server accepts a connection on its HTTPS port.
+- Before every planned sleep (idle sleep, make sleep-now, make wol-test) the server tells the
+  Pi "asleep until <time>, reason" on the Pi's LAN port 8082, with a shared token. The token
+  is made once and kept in the cluster (secret pi-gateway, namespace monitoring) and in the
+  Pi's root-only settings file; a notice with a wrong token gets 401. The Pi saves the notice,
+  so a Pi restart during a planned sleep doesn't turn it into an alarm.
+- Alerts go straight from the Pi to your ntfy topic (the same one as update 7), urgent:
+    "Server is down (not asleep)"     no answer for 3 minutes, and no sleep announced
+                                      (crash, power cut, cable, network);
+    "Server didn't wake on schedule"  still down 10 minutes after the announced wake time;
+    "Server didn't wake after a visit" the Pi sent the wake packet for a visitor 5 minutes
+                                      ago and the server still doesn't answer;
+    "Server is back"                  normal priority, with roughly how long it was down.
+- One alert per outage; short blips under 3 minutes (a Wi-Fi hiccup) stay quiet.
+- make pi-quiet MINUTES=30 silences "down" alerts for planned work (reboot, BIOS).
+- GET http://<pi>:8082/watch shows what the watcher sees (up/down, for how long, announced
+  sleep, whether it can alert); no secrets in it.
+
+Tests:       the decision logic, with a simulated clock: crash -> alert after 3 min, then
+             "back"; 60 s blip -> nothing; announced sleep that wakes on time -> nothing;
+             announced sleep that never wakes -> one alert 10 min after the wake time; a
+             visit's wake packet with the server staying down -> alert 5 min later. All pass.
+             Scripts: syntax checks pass, waker passes ruff. make pi-test now has 14 checks
+             (new: watcher sees the server up, can alert the phone, refuses notices without
+             the token).
+Real test:   after make pi-gateway (14 of 14 checks) and make sleep-setup, make alert-test slept
+             without telling the Pi (Pi log, IST):
+               20:32:05  sleep notice with a wrong token refused (pi-test check)
+               21:04:24  server down, no sleep announced
+               21:07:34  alert "Server is down (not asleep)", priority 5 (3 min 10 s later)
+               21:08:38  alert "Server is back", priority 3
+             and the owner got both on the phone. Announced sleeps (make sleep-now) gave no alert.
+             A first alert-test run woke after about 30 s by itself, before any alert (Issue 42).
+Mistake:     the first version of the "visit" test case stopped one step before the expected
+             alert time and failed; the watcher was right, the test window was extended.
+Status:      done.
 
 11. Phase 7: Raspberry Pi gateway, wake on visit
 

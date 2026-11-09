@@ -23,6 +23,7 @@ Problems hit on 4–5 November 2026:
 - Issues 36–41 (9 November): Phase 7, sleep and Wake-on-LAN with a Raspberry Pi gateway: a wrong broadcast
   address, names that weren't really announced, a reload loop after waking, Windows going around the Pi, and
   slips in the new scripts.
+- Issue 42 (9 November): a test sleep that ended by itself after 30 seconds.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -67,6 +68,7 @@ Problems hit on 4–5 November 2026:
 | 39 | Windows didn't wake the server: it went to the server's address directly, around the Pi | Client / DNS | Fixed |
 | 40 | Mistakes in the new sleep and Pi scripts, caught before they ran | Process | Fixed |
 | 41 | The server's network link runs at 100 Mb/s instead of 1 Gb/s | Hardware | Noted |
+| 42 | First `make alert-test` woke after ~30 s instead of 5 min, with no wake packet | Hardware / sleep | Noted (cause not found) |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -1071,3 +1073,30 @@ when the design changes.
 Wake-on-LAN works at any speed (cards often drop to 100 Mb/s while asleep anyway).
 
 **Next step:** try another (Cat5e or better) cable or router port and check `ethtool enp2s0 | grep Speed`.
+
+
+### Issue 42 — First `make alert-test` woke after ~30 s instead of 5 min, with no wake packet
+
+**Date:** 9 November 2026, testing the Pi's server-down alert (update 12).
+
+**Symptom:** `make alert-test` sleeps for 5 minutes without telling the Pi. The first run came back after about 30
+seconds, too soon for the alert (3 minutes):
+
+```text
+21:02:37 IST kernel: PM: suspend entry (deep)
+21:03:06 IST kernel: ACPI: PM: Waking up from system sleep state S3
+Pi (UTC): 15:32:51 server_down ... 15:33:21 server_up
+```
+
+The second run, right after, behaved: down 21:04:24, Pi alert "Server is down (not asleep)" at 21:07:34,
+"Server is back" at 21:08:38. That sleep lasted 4 minutes (21:04:19 to 21:08:19) rather than 5.
+
+**What was checked:** the Pi logged no magic packet in either window, so neither a visit nor the Pi woke it.
+`/sys/power/pm_wakeup_irq` doesn't record the source on this machine.
+
+**Likely cause (not confirmed):** a wake alarm left over from the earlier `make sleep-now` tests, or a spurious
+wake event; the slightly short second sleep points at the clock alarm rather than the network card. Not harmful:
+the feature it tested works, and a too-early wake only means the server is awake.
+
+**Next step if it repeats:** before sleeping, check `cat /sys/class/rtc/rtc0/wakealarm` and
+`grep enabled /proc/acpi/wakeup`, and clear old alarms with `echo 0 | sudo tee /sys/class/rtc/rtc0/wakealarm`.
