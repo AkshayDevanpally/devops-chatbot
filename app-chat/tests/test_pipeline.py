@@ -6,8 +6,9 @@ from fastapi.testclient import TestClient
 from app import main
 
 
-def _client(monkeypatch, handler=None):
+def _client(monkeypatch, handler=None, env="dev"):
     main._hits.clear()
+    monkeypatch.setattr(main.config, "APP_ENV", env)
     backend = None
     if handler:
         backend = httpx.AsyncClient(base_url="http://pipeline-events", transport=httpx.MockTransport(handler))
@@ -58,3 +59,22 @@ def test_one_colour_change_per_five_minutes_per_visitor(monkeypatch):
     c = _client(monkeypatch, lambda req: httpx.Response(202, json={"accepted": True}))
     assert c.post("/api/theme", json={"color": "amber"}).status_code == 202   # sets the visitor cookie
     assert c.post("/api/theme", json={"color": "rose"}).status_code == 429
+
+
+def test_colour_goes_to_the_environment_it_was_picked_on(monkeypatch):
+    for env in ("qa", "prod"):
+        seen = []
+
+        def handler(req):
+            seen.append(req.content)
+            return httpx.Response(202, json={"accepted": True})
+        c = _client(monkeypatch, handler, env=env)
+        r = c.post("/api/theme", json={"color": "rose"})
+        assert r.status_code == 202 and r.json()["env"] == env
+        assert f'"env":"{env}"'.encode() in seen[-1].replace(b" ", b"")
+
+
+def test_no_colour_deploys_outside_the_three_environments(monkeypatch):
+    c = _client(monkeypatch, lambda req: httpx.Response(202, json={"accepted": True}), env="local")
+    assert c.post("/api/theme", json={"color": "rose"}).status_code == 503
+

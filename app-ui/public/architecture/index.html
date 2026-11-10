@@ -188,7 +188,7 @@
       <text x="244" y="643" class="m">FastAPI :8000</text>
       <text x="244" y="659" class="m">metrics :9100</text>
       <text x="76" y="702" class="s">1 api + 1 ui · quota 768 Mi</text>
-      <text x="76" y="720" class="s">DB chat_dev · colour from Be a Dev</text>
+      <text x="76" y="720" class="s">DB chat_dev · own colour from Be a Dev</text>
 
       <rect class="ns-app" x="430" y="570" width="340" height="170" rx="6"/>
       <text x="446" y="590" class="m b">chatbot-qa</text>
@@ -834,7 +834,7 @@
         <rect class="ns-app" x="760" y="160" width="124" height="130" rx="5"/>
         <text x="770" y="182" class="m s">06</text><text x="790" y="182" class="b">Deploy dev</text>
         <text x="770" y="206" class="s">promote.sh dev</text>
-        <text x="770" y="222" class="s">keeps dev colour</text>
+        <text x="770" y="222" class="s">keeps its colour</text>
         <text x="770" y="238" class="s">verify, else back</text>
         <text x="770" y="278" class="m s">≤ 15 min</text>
 
@@ -929,7 +929,7 @@
 <section id="live">
   <div class="sec-head">
     <h2>7 · Live pipeline page and Be a Dev</h2>
-    <p>The Pipeline page shows the real Jenkins runs as they happen, and the Be a Dev page starts a real deploy to dev. Neither the browser nor chat-api has a Jenkins login: a small bridge in the ci namespace does, with an account that can only read and start jobs.</p>
+    <p>The Pipeline page shows the real Jenkins runs as they happen, and each site's Be a Dev page starts a real colour deploy to that environment. Neither the browser nor chat-api has a Jenkins login: a small bridge in the ci namespace does, with an account that can only read and start jobs.</p>
   </div>
   <figure>
     <div class="sheet">
@@ -996,20 +996,20 @@
       <text x="276" y="330" class="m">amber emerald slate</text>
 
       <rect class="node" x="500" y="250" width="230" height="110" rx="6"/>
-      <text x="516" y="274" class="b">2 · Deploy dev</text>
-      <text x="516" y="294" class="s">ConfigMap chatbot-theme</text>
+      <text x="516" y="274" class="b">2 · Deploy (that env)</text>
+      <text x="516" y="294" class="s">ConfigMap chatbot-theme, waits</text>
       <text x="516" y="312" class="m">helm upgrade --reuse-values</text>
       <text x="516" y="330" class="m">--set theme=&lt;colour&gt;</text>
-      <text x="516" y="348" class="s">dev only · --atomic</text>
+      <text x="516" y="348" class="s">if a deploy runs · --atomic</text>
 
       <rect class="node" x="770" y="250" width="200" height="110" rx="6"/>
       <text x="786" y="274" class="b">3 · Verify</text>
-      <text x="786" y="294" class="s">GET dev.chatbot.local</text>
+      <text x="786" y="294" class="s">GET that site's</text>
       <text x="786" y="312" class="m">/theme.json</text>
       <text x="786" y="330" class="s">over HTTPS, 20 tries</text>
 
       <rect class="ns-app" x="1010" y="250" width="170" height="110" rx="6"/>
-      <text x="1026" y="274" class="b">chatbot-dev</text>
+      <text x="1026" y="274" class="b">chatbot-&lt;env&gt;</text>
       <text x="1026" y="294" class="s">new colour live</text>
       <text x="1026" y="312" class="s">~40 s after the click</text>
 
@@ -1019,7 +1019,7 @@
       <path class="flow" d="M970 305 H1008" marker-end="url(#ah)"/>
     </svg>
     </div>
-    <figcaption>Pipeline deploys to dev read the chatbot-theme ConfigMap, so the next push keeps the chosen colour. qa and prod keep their own colours. If Jenkins can't be reached, the Pipeline page plays a demo build instead.</figcaption>
+    <figcaption>chat-api adds its own environment (dev, qa or prod) to the request, so the browser can't aim at another one. Pipeline deploys read each environment's chatbot-theme ConfigMap, so the next push keeps the chosen colour. If Jenkins can't be reached, the Pipeline page plays a demo build instead.</figcaption>
   </figure>
   <div class="table-wrap">
     <table>
@@ -1457,7 +1457,7 @@
     <li class="done"><b>6</b>AWS burst compute with Terraform: Spot node joins k3s, scraped with <code>cloud="aws"</code> (11 of 11)</li>
     <li class="done"><b>+</b>Cost guardrails ($10 budget, kill switch), off-site backups with a Pulse panel, phone alerts through ntfy, overload protection</li>
     <li class="done"><b>7</b>Sleep when idle and Wake-on-LAN through a Raspberry Pi gateway (no SQS needed); server-down alerts from the Pi</li>
-    <li class="done"><b>8</b>Live Jenkins runs and logs on the Pipeline page; Be a Dev starts real <code>theme-deploy</code> runs on dev</li>
+    <li class="done"><b>8</b>Live Jenkins runs and logs on the Pipeline page; Be a Dev starts real <code>theme-deploy</code> runs on the environment it was picked on</li>
     <li class="done"><b>9</b>Public showcase on Netlify: a static copy built from GitHub on every push, with a snapshot of prod's dashboards; no request reaches the home server</li>
     <li class="next"><b>next</b>Secrets from a secrets manager, image signing (cosign + admission check), alerts for crash-looping pods, a gigabit cable for the server; maybe a live chat for the public site through a tunnel</li>
   </ol>

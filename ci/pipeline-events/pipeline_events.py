@@ -6,7 +6,7 @@ pipeline-viewer account, which may read builds and start jobs, and can't approve
 
     GET  /pipeline?job=chatbot|theme-deploy        latest runs with their stages
     GET  /log?job=...&build=N&stage=ID              one stage's log (secrets redacted, last 400 lines)
-    POST /theme {"color": "rose"}                   start theme-deploy (409 if one is running)
+    POST /theme {"color": "rose", "env": "qa"}      start theme-deploy for that env (409 if one is running)
 
 Standard library only.
 """
@@ -30,6 +30,7 @@ USER = os.getenv("JENKINS_USER", "pipeline-viewer")
 PASSWORD = os.getenv("JENKINS_PASSWORD", "")
 JOBS = ("chatbot", "theme-deploy")
 COLORS = ("teal", "indigo", "rose", "amber", "emerald", "slate")
+ENVS = ("dev", "qa", "prod")   # each site's Be a Dev page changes its own colour
 AUTH = "Basic " + base64.b64encode(f"{USER}:{PASSWORD}".encode()).decode()
 _cache: dict[str, tuple[float, dict]] = {}
 _lock = threading.Lock()
@@ -89,6 +90,8 @@ def run_details(job: str, number: str) -> dict:
             for p in a.get("parameters", []) or []:
                 if p.get("name") == "COLOR":
                     out["color"] = p.get("value")
+                if p.get("name") == "ENV":
+                    out["env"] = p.get("value")
             sha = (a.get("lastBuiltRevision") or {}).get("SHA1")
             if sha:
                 out["commit"] = sha[:7]
@@ -139,16 +142,19 @@ def stage_log(job: str, build: int, stage: str) -> dict:
     return {"job": job, "build": build, "stage": stage, "status": d.get("status"), "log": text or "(no output yet)"}
 
 
-def start_theme(color: str) -> tuple[int, dict]:
+def start_theme(color: str, env: str) -> tuple[int, dict]:
     if color not in COLORS:
         return 400, {"error": "unknown colour"}
+    if env not in ENVS:
+        return 400, {"error": "unknown environment"}
     d = get("/job/theme-deploy/api/json?tree=inQueue,lastBuild[number,building]")
     if d.get("inQueue") or (d.get("lastBuild") or {}).get("building"):
         return 409, {"error": "a colour change is already on its way; watch it on the Pipeline page"}
-    status = post_with_crumb("/job/theme-deploy/buildWithParameters?" + urllib.parse.urlencode({"COLOR": color}))
-    log("theme_requested", color=color, jenkins_status=status)
+    status = post_with_crumb("/job/theme-deploy/buildWithParameters?"
+                             + urllib.parse.urlencode({"COLOR": color, "ENV": env}))
+    log("theme_requested", color=color, env=env, jenkins_status=status)
     _cache.pop("theme-deploy", None)
-    return 202, {"accepted": True, "color": color}
+    return 202, {"accepted": True, "color": color, "env": env}
 
 
 # ---------------------------------------------------------------- HTTP
@@ -191,7 +197,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "not found"})
         try:
             body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1024)) or b"{}")
-            code, data = start_theme(str(body.get("color", "")))
+            code, data = start_theme(str(body.get("color", "")), str(body.get("env", "")))
         except ValueError:
             code, data = 400, {"error": "bad request"}
         except (urllib.error.URLError, OSError) as exc:

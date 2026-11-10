@@ -14,10 +14,11 @@
   </header>
   <main>
     <h2>Be a developer for a minute</h2>
-    <p class="note">Pick a colour. A real Jenkins job checks it, deploys it to the <b>dev</b> environment and
-      verifies the site, and you watch every step live on the Pipeline page. Dev keeps the colour until the next change.</p>
+    <p class="note">Pick a colour. A real Jenkins job checks it, deploys it to <b class="target-env">this</b> environment and
+      verifies the site, and you watch every step live on the Pipeline page. Each environment (dev, qa, prod) has its own
+      colour and keeps it until the next change.</p>
     <div class="swatches" id="swatches"></div>
-    <button id="ship" disabled>Ship it to dev</button>
+    <button id="ship" disabled>Ship it</button>
     <p class="note" id="result"></p>
   </main>
   <script src="/config.js"></script>

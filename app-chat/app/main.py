@@ -407,11 +407,14 @@ async def request_theme(body: ThemeIn, request: Request, response: Response):
     uid = get_or_set_uid(request, response)
     if rate_limited(f"theme:{uid}", 1, window=300):
         raise HTTPException(429, "one colour change per 5 minutes")
-    code, data = await pipeline_events("POST", "/theme", json={"color": body.color})
-    jlog("theme_requested", color=body.color, result=code)
+    # Each environment's page changes that environment's colour; the browser can't pick another one.
+    if config.APP_ENV not in ("dev", "qa", "prod"):
+        raise HTTPException(503, "colour deploys run only in dev, qa and prod")
+    code, data = await pipeline_events("POST", "/theme", json={"color": body.color, "env": config.APP_ENV})
+    jlog("theme_requested", color=body.color, env=config.APP_ENV, result=code)
     if code != 202:
         raise HTTPException(code if code in (400, 409, 503) else 502, data.get("error", "not started"))
-    return {"accepted": True, "color": body.color}
+    return {"accepted": True, "color": body.color, "env": config.APP_ENV}
 
 
 # ---------- Pipeline page: live Jenkins builds (through pipeline-events) ----------

@@ -60,7 +60,7 @@ function renderLive() {
   runs.forEach(r => {
     const b = document.createElement("button"); b.type = "button";
     b.className = `run-chip ${r === run ? "on" : ""} st-${(LOOK[r.status] || ["", ""])[0]}`;
-    b.textContent = `#${r.number}${r.color ? " · " + r.color : ""}`;
+    b.textContent = `#${r.number}${r.color ? " · " + r.color : ""}${r.env ? " → " + r.env : ""}`;
     b.title = `${(RUN_BADGE[r.status] || ["", "", r.status])[2]} · ${ago(r.started)}`;
     b.onclick = () => { picked = r === runs[0] ? null : r.number; renderLive(); };
     runsEl.appendChild(b);
@@ -71,6 +71,7 @@ function renderLive() {
   $("run-badge").textContent = ""; $("run-badge").append(badge(run.status));
   const meta = [];
   if (run.color) meta.push(`colour: ${run.color}`);
+  if (run.env) meta.push(`to ${run.env}`);
   if (run.commit) meta.push(`commit ${run.commit}`);
   if (run.started) meta.push(`started ${ago(run.started)}`);
   if (run.duration_ms) meta.push(run.status === "IN_PROGRESS" ? `running ${dur(run.duration_ms)}` : `took ${dur(run.duration_ms)}`);
@@ -142,7 +143,7 @@ async function refresh() {
     data = d; lastAt = Date.now();
     $("mode").textContent = job === "chatbot"
       ? "Live: every push to master is built, tested, scanned and promoted dev → qa → prod (an admin approves prod)."
-      : "Live: colour changes from Be a Dev, deployed to dev.";
+      : "Live: colour changes from Be a Dev, each deployed to the environment it was picked on.";
     $("jobs").hidden = false; $("run").hidden = true;
     renderLive();
   } catch { failed = true; }

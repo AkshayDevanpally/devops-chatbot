@@ -3,6 +3,17 @@ const wrap = document.getElementById("swatches");
 const ship = document.getElementById("ship");
 const result = document.getElementById("result");
 
+// Name the environment this page deploys to (chat-api decides it; the page only shows it).
+(async () => {
+  try {
+    const env = (await (await fetch("/theme.json", { cache: "no-store" })).json()).env;
+    if (["dev", "qa", "prod"].includes(env)) {
+      document.querySelectorAll(".target-env").forEach(el => { el.textContent = env; });
+      ship.textContent = `Ship it to ${env}`;
+    }
+  } catch { /* keep the generic wording */ }
+})();
+
 (async () => {
   let themes = Object.keys(THEME_COLORS);
   try { themes = (await (await api("/api/themes")).json()).themes || themes; } catch { /* fall back */ }

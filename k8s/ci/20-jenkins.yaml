@@ -111,10 +111,11 @@ data:
             }
           }
           pipelineJob('theme-deploy') {
-            description('"Be a Dev": deploy a new colour to dev (started from the site). Pipeline: ci/theme-deploy.Jenkinsfile.')
+            description('"Be a Dev": deploy a new colour to the environment it was picked on (started from the site). Pipeline: ci/theme-deploy.Jenkinsfile.')
             logRotator { numToKeep(20) }
             parameters {
-              choiceParam('COLOR', ['teal', 'indigo', 'rose', 'amber', 'emerald', 'slate'], 'New colour for dev')
+              choiceParam('COLOR', ['teal', 'indigo', 'rose', 'amber', 'emerald', 'slate'], 'New colour')
+              choiceParam('ENV', ['dev', 'qa', 'prod'], 'Environment whose colour changes')
             }
             properties { disableConcurrentBuilds() }
             definition {
