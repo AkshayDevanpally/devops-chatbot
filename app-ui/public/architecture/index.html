@@ -479,7 +479,7 @@
       <rect class="ns-shared" x="990" y="210" width="190" height="64" rx="6"/>
       <text x="1006" y="234" class="b">Postgres :5432</text>
       <text x="1006" y="252" class="m">chat_&lt;env&gt; · TLS</text>
-      <text x="1006" y="268" class="s">50 users · 15 chats each</text>
+      <text x="1006" y="268" class="s">latest 50 users · 15 chats</text>
       <rect class="ns-shared" x="990" y="290" width="190" height="56" rx="6"/>
       <text x="1006" y="314" class="b">Prometheus :9090</text>
       <text x="1006" y="332" class="s">fixed queries only</text>
@@ -504,7 +504,7 @@
     <li><b>Pi.</b> nginx (stream mode) opens a TCP connection to 192.168.1.101:443 and copies bytes both ways. If the server doesn't answer within 1 second it is probably asleep, and nginx uses its backup instead: the waking page (section 4).</li>
     <li><b>Traefik.</b> Ends TLS with the certificate cert-manager issued from the home CA, adds HSTS, and routes by host name: <code>chatbot.local</code> to prod, <code>qa.</code> to qa, <code>dev.</code> to dev. Paths under <code>/api</code> go to chat-api, everything else to nginx.</li>
     <li><b>chat-api.</b> Gives the visitor a signed, HttpOnly <code>uid</code> cookie, applies rate limits, then asks the ModelGate for the model. Each pod streams one reply at a time; up to 2 people (4 in prod) wait up to 30 s and see "you're in line". When the line is full the answer is "Busy right now… try again" (503) at once.</li>
-    <li><b>Model and data.</b> chat-api streams the prompt to Ollama (<code>ai</code>, :11434) and saves the chat in its own database (<code>chat_prod</code>, :5432, TLS). Triggers in the database refuse a 51st user and keep each user's newest 15 chats.</li>
+    <li><b>Model and data.</b> chat-api streams the prompt to Ollama (<code>ai</code>, :11434) and saves the chat in its own database (<code>chat_prod</code>, :5432, TLS). Triggers in the database keep the latest 50 users (a new user replaces the first one created, with their chats) and each user's newest 15 chats.</li>
     <li><b>Dashboards.</b> Pulse and Capacity call <code>/api/pulse</code> and <code>/api/capacity</code>; chat-api runs fixed Prometheus queries, never one from the browser. The backups panel and the Pipeline page go through backup-ops and pipeline-events in the same way.</li>
     <li><b>Bursting.</b> While an AWS burst node is up, burst chat-api pods carry the same label, so the prod Service also sends requests to them over the tunnel. They use their own Ollama on AWS and the home Postgres through 10.200.0.1.</li>
   </ol>
@@ -1459,7 +1459,7 @@
     <li class="done"><b>7</b>Sleep when idle and Wake-on-LAN through a Raspberry Pi gateway (no SQS needed); server-down alerts from the Pi</li>
     <li class="done"><b>8</b>Live Jenkins runs and logs on the Pipeline page; Be a Dev starts real <code>theme-deploy</code> runs on the environment it was picked on</li>
     <li class="done"><b>9</b>Public showcase on Netlify: a static copy built from GitHub on every push, with a snapshot of prod's dashboards; no request reaches the home server</li>
-    <li class="next"><b>9b</b>Live chat on the public site: Netlify signs each request → Tailscale Funnel → the Pi checks the signature, allows only chat, limits each visitor → prod chat-api (public visitors are guests with short replies)</li>
+    <li class="next"><b>9b</b>Public site goes live: Netlify signs each request → Tailscale Funnel → the Pi checks the signature, allows only the public paths (chat, Pulse, Capacity, Backups view, Pipeline + trimmed logs, Be a Dev) → prod chat-api. "Back up now" stays home-only; public colour deploys capped at 6 an hour</li>
     <li class="next"><b>next</b>Secrets from a secrets manager, image signing (cosign + admission check), alerts for crash-looping pods, a gigabit cable for the server</li>
   </ol>
 </section>

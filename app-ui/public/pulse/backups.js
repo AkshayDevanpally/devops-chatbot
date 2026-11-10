@@ -92,7 +92,8 @@
     btn.disabled = !d.manual_enabled || d.running;
     btn.textContent = d.running ? "Backup running…" : "Back up now";
     btn.title = d.manual_enabled ? "" : "Set an admin password first: make backup-admin-password";
-    if (SHOWCASE) { btn.disabled = true; btn.title = "Only on the home server"; msg(`Snapshot from ${showcaseWhen()}. Backups run on the home server.`); }
+    if (LIVE) { btn.hidden = true; }   // public site: view only, "Back up now" is home-only
+    if (STATIC) { btn.disabled = true; btn.title = "Only on the home server"; msg(`Snapshot from ${showcaseWhen()}. Backups run on the home server.`); }
   }
 
   async function refresh() {

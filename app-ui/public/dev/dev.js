@@ -17,7 +17,7 @@ const result = document.getElementById("result");
 (async () => {
   let themes = Object.keys(THEME_COLORS);
   try { themes = (await (await api("/api/themes")).json()).themes || themes; } catch { /* fall back */ }
-  if (SHOWCASE) result.textContent = "Colour deploys run through Jenkins on the home server, so shipping is off in this public copy. "
+  if (STATIC) result.textContent = "Colour deploys run through Jenkins on the home server, so shipping is off in this public copy. "
     + "On the home network the pick goes through validate → deploy dev → verify in about 40 seconds.";
   themes.forEach(name => {
     const s = document.createElement("div");
@@ -28,7 +28,7 @@ const result = document.getElementById("result");
       document.querySelectorAll(".swatch").forEach(x => x.classList.remove("selected"));
       s.classList.add("selected");
       picked = name;
-      ship.disabled = !!SHOWCASE;
+      ship.disabled = STATIC;
     };
     wrap.appendChild(s);
   });

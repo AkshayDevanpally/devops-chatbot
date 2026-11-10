@@ -1,5 +1,5 @@
-"""Chat API: streams replies from a small Qwen model (via Ollama) and stores history
-for the first 50 users, keeping each user's newest 15 chats."""
+"""Chat API: streams replies from a small Qwen model (via Ollama) and stores history for the latest
+50 users (a new one replaces the first user created), keeping each user's newest 15 chats."""
 import asyncio
 import hmac
 import json
@@ -114,7 +114,7 @@ app.add_middleware(MetricsMiddleware)
 # ---------- tiny in-memory rate limiter (per user id + IP) ----------
 # Counts are per pod: with N API replicas a client can get up to N x the limit.
 _hits: dict[str, deque] = {}
-_LONGEST_WINDOW = 600.0   # the longest window any caller uses ("Back up now" attempts)
+_LONGEST_WINDOW = 3600.0  # the longest window any caller uses (public colour deploys per hour)
 _SWEEP_EVERY = 60.0
 _last_sweep = 0.0
 _now = time.monotonic
@@ -148,12 +148,15 @@ def public_client(request: Request) -> str | None:
     return None
 
 
-PUBLIC_PATHS = {"/api/chat", "/api/history", "/api/status", "/api/wake"}
+# What the public site may use. Not here, so home-only: "Back up now" (/api/backups/run) and metrics.
+PUBLIC_PATHS = {"/api/chat", "/api/history", "/api/status", "/api/wake", "/api/pulse", "/api/capacity",
+                "/api/backups", "/api/backups/log", "/api/pipeline", "/api/pipeline/log",
+                "/api/themes", "/api/theme"}
 
 
 @app.middleware("http")
-async def public_only_chat(request: Request, call_next):
-    """The Pi forwards only the chat paths; refuse the rest here too, in case that ever changes."""
+async def public_paths_only(request: Request, call_next):
+    """The Pi forwards only these paths; refuse the rest here too, in case that ever changes."""
     if request.url.path not in PUBLIC_PATHS and public_client(request) is not None:
         return JSONResponse({"detail": "not available on the public site"}, status_code=404)
     return await call_next(request)
@@ -181,7 +184,8 @@ def get_or_set_uid(request: Request, response: Response) -> str:
 
 
 async def ensure_user(uid: str) -> bool:
-    """Return True if this user's chats are stored (one of the first 50)."""
+    """Return True if this user's chats are stored (always, since a new user replaces the first one;
+    False only if an older database still refuses the 51st user)."""
     async with pool.connection() as conn:
         row = await (await conn.execute("SELECT 1 FROM users WHERE id = %s", (uid,))).fetchone()
         if row:
@@ -269,8 +273,6 @@ async def status():
 @app.get("/api/history")
 async def history(request: Request, response: Response):
     uid = get_or_set_uid(request, response)
-    if public_client(request) is not None:   # public visitors are always guests: nothing stored
-        return {"stored": False, "chats": [], "public": True}
     async with pool.connection() as conn:
         stored = await (await conn.execute("SELECT 1 FROM users WHERE id=%s", (uid,))).fetchone()
         rows = await (await conn.execute(
@@ -332,10 +334,9 @@ BUSY = "Busy right now: lots of people are chatting. Try again in a moment."
 async def chat(body: ChatIn, request: Request, response: Response):
     uid = get_or_set_uid(request, response)
     public = public_client(request) is not None
-    per_visitor = config.PUBLIC_RATE_LIMIT_PER_MIN if public else config.RATE_LIMIT_PER_MIN
-    if rate_limited(f"chat:{uid}", per_visitor) or rate_limited(
-        f"chatip:{client_key(request)}", per_visitor * (2 if public else 3)
-    ) or (public and rate_limited("chat:public-all", config.PUBLIC_CHATS_PER_MIN)):
+    if rate_limited(f"chat:{uid}", config.RATE_LIMIT_PER_MIN) or rate_limited(
+        f"chatip:{client_key(request)}", config.RATE_LIMIT_PER_MIN * 3
+    ):
         CHAT_REQUESTS.labels("rate_limited").inc()
         raise HTTPException(429, "slow down")
 
@@ -343,8 +344,7 @@ async def chat(body: ChatIn, request: Request, response: Response):
         CHAT_REQUESTS.labels("busy").inc()
         raise HTTPException(503, BUSY, headers={"Retry-After": "15"})
 
-    # Public visitors never take one of the 50 places with saved history.
-    stored = False if public else await ensure_user(uid)
+    stored = await ensure_user(uid)
     if public:
         jlog("public_chat")
     messages = [{"role": "system", "content": "You are a concise, friendly assistant."}]
@@ -376,7 +376,7 @@ async def chat(body: ChatIn, request: Request, response: Response):
                 async with http.stream(
                     "POST", "/api/chat",
                     json={"model": config.MODEL, "messages": messages, "stream": True,
-                          "options": {"num_predict": config.PUBLIC_MAX_TOKENS if public else 512}},
+                          "options": {"num_predict": 512}},
                 ) as r:
                     r.raise_for_status()
                     async for line in r.aiter_lines():
@@ -442,6 +442,8 @@ async def request_theme(body: ThemeIn, request: Request, response: Response):
     uid = get_or_set_uid(request, response)
     if rate_limited(f"theme:{uid}", 1, window=300):
         raise HTTPException(429, "one colour change per 5 minutes")
+    if public_client(request) is not None and rate_limited("theme:public-all", config.PUBLIC_THEME_PER_HOUR, window=3600):
+        raise HTTPException(429, f"the public site allows {config.PUBLIC_THEME_PER_HOUR} colour changes an hour; try later")
     # Each environment's page changes that environment's colour; the browser can't pick another one.
     if config.APP_ENV not in ("dev", "qa", "prod"):
         raise HTTPException(503, "colour deploys run only in dev, qa and prod")
@@ -458,7 +460,7 @@ PIPELINE_JOB = r"^(chatbot|theme-deploy)$"
 
 @app.get("/api/pipeline")
 async def pipeline_view(request: Request, response: Response, job: str = Query("chatbot", pattern=PIPELINE_JOB)):
-    if rate_limited(f"pipeline:{request.client.host}", 40):
+    if rate_limited(f"pipeline:{client_key(request)}", 40):
         raise HTTPException(429, "too many refreshes")
     code, data = await pipeline_events("GET", "/pipeline", params={"job": job})
     response.headers["Cache-Control"] = "no-store"
@@ -468,9 +470,12 @@ async def pipeline_view(request: Request, response: Response, job: str = Query("
 @app.get("/api/pipeline/log")
 async def pipeline_log(request: Request, response: Response, job: str = Query(pattern=PIPELINE_JOB),
                        build: int = Query(ge=1, le=1_000_000), stage: int = Query(ge=1, le=10_000_000)):
-    if rate_limited(f"pipeline-log:{request.client.host}", 40):
+    if rate_limited(f"pipeline-log:{client_key(request)}", 40):
         raise HTTPException(429, "too many requests")
-    code, data = await pipeline_events("GET", "/log", params={"job": job, "build": build, "stage": stage})
+    params = {"job": job, "build": build, "stage": stage}
+    if public_client(request) is not None:
+        params["public"] = 1   # trimmed: private addresses and host names blanked, no security-scan log
+    code, data = await pipeline_events("GET", "/log", params=params)
     if code != 200:
         raise HTTPException(404 if code == 404 else 502, data.get("error", "log unavailable"))
     response.headers["Cache-Control"] = "no-store"
@@ -494,7 +499,7 @@ async def storage_counts() -> dict | None:
 async def pulse_view(request: Request, response: Response, range_: str = Query("15m", alias="range")):
     if range_ not in pulse.RANGES:
         raise HTTPException(422, "unknown range")
-    if rate_limited(f"pulse:{request.client.host}", 30):
+    if rate_limited(f"pulse:{client_key(request)}", 30):
         raise HTTPException(429, "too many refreshes")
     if pulse_source:
         data = dict(await pulse_source.snapshot(range_))   # copy: the snapshot is shared and cached
@@ -509,7 +514,7 @@ async def pulse_view(request: Request, response: Response, range_: str = Query("
 # ---------- Capacity: local hardware vs AWS ----------
 @app.get("/api/capacity")
 async def capacity_view(request: Request, response: Response):
-    if rate_limited(f"capacity:{request.client.host}", 30):
+    if rate_limited(f"capacity:{client_key(request)}", 30):
         raise HTTPException(429, "too many refreshes")
     data = await capacity_source.snapshot("capacity") if capacity_source else capacity.unavailable()
     response.headers["Cache-Control"] = "no-store"
@@ -533,7 +538,7 @@ async def backup_ops(method: str, path: str, **kw) -> tuple[int, dict]:
 
 @app.get("/api/backups")
 async def backups_view(request: Request, response: Response):
-    if rate_limited(f"backups:{request.client.host}", 30):
+    if rate_limited(f"backups:{client_key(request)}", 30):
         raise HTTPException(429, "too many refreshes")
     code, data = await backup_ops("GET", "/status")
     response.headers["Cache-Control"] = "no-store"
@@ -542,7 +547,7 @@ async def backups_view(request: Request, response: Response):
 
 @app.get("/api/backups/log")
 async def backup_log(request: Request, response: Response, job: str = Query(pattern=r"^[a-z0-9-]{1,63}$")):
-    if rate_limited(f"backup-log:{request.client.host}", 30):
+    if rate_limited(f"backup-log:{client_key(request)}", 30):
         raise HTTPException(429, "too many requests")
     code, data = await backup_ops("GET", "/logs", params={"job": job})
     if code != 200:
@@ -554,7 +559,7 @@ async def backup_log(request: Request, response: Response, job: str = Query(patt
 @app.post("/api/backups/run", status_code=202)
 async def backup_run(body: BackupRun, request: Request):
     # backup-ops checks the password and limits wrong guesses for everyone; this limits per IP too.
-    if rate_limited(f"backup-run:{request.client.host}", 5, window=600):
+    if rate_limited(f"backup-run:{client_key(request)}", 5, window=600):
         raise HTTPException(429, "too many attempts, try again in a few minutes")
     code, data = await backup_ops("POST", "/run", json={"password": body.password})
     jlog("backup_run_requested", result=code)

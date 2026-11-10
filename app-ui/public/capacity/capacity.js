@@ -258,7 +258,7 @@ function updateLive() {
   const live = $("live"), text = $("live-text");
   if (failed) { live.className = "live err"; text.textContent = last ? "Connection lost, retrying" : "Can't reach the API"; return; }
   if (!last) return;
-  if (SHOWCASE) { live.className = "live"; text.textContent = `Snapshot from ${showcaseWhen()}`; return; }
+  if (STATIC) { live.className = "live"; text.textContent = `Snapshot from ${showcaseWhen()}`; return; }
   live.className = "live on";
   text.textContent = `Updated ${Math.max(0, Math.round((Date.now() - lastAt) / 1000))}s ago`;
 }

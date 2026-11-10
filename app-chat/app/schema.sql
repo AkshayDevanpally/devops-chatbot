@@ -15,14 +15,16 @@ CREATE TABLE IF NOT EXISTS chats (
 
 CREATE INDEX IF NOT EXISTS idx_chats_user_created ON chats (user_id, created_at DESC, id DESC);
 
--- Rule 1: only the first 50 users are stored.
+-- Rule 1: at most 50 users are stored. A new user beyond that replaces the FIRST user created
+-- (first in, first out), whose chats go with them (ON DELETE CASCADE). Chosen on 10 Nov 2026 when the
+-- site went public; before, the 51st user was refused and chatted as a guest.
 CREATE OR REPLACE FUNCTION cap_users() RETURNS trigger AS $$
 BEGIN
-    -- Serialise concurrent sign-ups so two inserts can't both see 49.
+    -- Serialise concurrent sign-ups so two inserts can't both see 49 (or both remove the same user).
     PERFORM pg_advisory_xact_lock(424242);
-    IF (SELECT count(*) FROM users) >= 50 THEN
-        RAISE EXCEPTION 'user_limit_reached' USING ERRCODE = 'P0001';
-    END IF;
+    DELETE FROM users
+    WHERE id IN (SELECT id FROM users ORDER BY created_at, id
+                 LIMIT GREATEST((SELECT count(*) FROM users) - 49, 0));
     RETURN NEW;
 END $$ LANGUAGE plpgsql;
 

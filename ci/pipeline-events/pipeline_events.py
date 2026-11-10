@@ -5,7 +5,8 @@ access; it calls this service, which only chat-api may reach. This service talks
 pipeline-viewer account, which may read builds and start jobs, and can't approve prod.
 
     GET  /pipeline?job=chatbot|theme-deploy        latest runs with their stages
-    GET  /log?job=...&build=N&stage=ID              one stage's log (secrets redacted, last 400 lines)
+    GET  /log?job=...&build=N&stage=ID[&public=1]   one stage's log (secrets redacted, last 400 lines;
+                                                    public: also addresses and host names, no scan log)
     POST /theme {"color": "rose", "env": "qa"}      start theme-deploy for that env (409 if one is running)
 
 Standard library only.
@@ -47,8 +48,19 @@ REDACT = [
 ]
 
 
-def redact(text: str) -> str:
-    for pattern, repl in REDACT:
+# For the public (Netlify) site, also hide where things live inside the home network.
+REDACT_PUBLIC = [
+    (re.compile(r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|\b192\.168\.\d{1,3}\.\d{1,3}\b"
+                r"|\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b"), "‹private-ip›"),
+    (re.compile(r"(?i)\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b"), "‹mac›"),
+    (re.compile(r"\b[\w.-]+\.svc(?:\.cluster\.local)?\b"), "‹service›"),
+    (re.compile(r"/home/[a-z_][a-z0-9_-]*|/var/lib/jenkins-agent"), "~"),
+]
+HIDDEN_ON_PUBLIC = {"Security scan"}   # which weaknesses exist and when: not for the internet
+
+
+def redact(text: str, public: bool = False) -> str:
+    for pattern, repl in REDACT + (REDACT_PUBLIC if public else []):
         text = pattern.sub(repl, text)
     return text
 
@@ -126,8 +138,11 @@ def pipeline(job: str) -> dict:
     return data
 
 
-def stage_log(job: str, build: int, stage: str) -> dict:
+def stage_log(job: str, build: int, stage: str, public: bool = False) -> dict:
     d = get(f"/job/{job}/{build}/execution/node/{stage}/wfapi/describe")
+    if public and d.get("name") in HIDDEN_ON_PUBLIC:
+        return {"job": job, "build": build, "stage": stage, "status": d.get("status"),
+                "log": "The security scan's log is only shown on the home network."}
     lines = []
     for node in d.get("stageFlowNodes", []):
         desc = node.get("parameterDescription")
@@ -138,7 +153,7 @@ def stage_log(job: str, build: int, stage: str) -> dict:
             text = ""
         text = html.unescape(re.sub(r"<[^>]+>", "", text or ""))
         lines.extend(text.rstrip("\n").splitlines())
-    text = redact("\n".join(lines[-400:]))
+    text = redact("\n".join(lines[-400:]), public)
     return {"job": job, "build": build, "stage": stage, "status": d.get("status"), "log": text or "(no output yet)"}
 
 
@@ -184,7 +199,7 @@ class Handler(BaseHTTPRequestHandler):
                 job, build, stage = q.get("job", ""), q.get("build", ""), q.get("stage", "")
                 if job not in JOBS or not build.isdigit() or not stage.isdigit():
                     return self.reply(400, {"error": "need job, build and stage"})
-                return self.reply(200, stage_log(job, int(build), stage))
+                return self.reply(200, stage_log(job, int(build), stage, q.get("public") == "1"))
             self.reply(404, {"error": "not found"})
         except urllib.error.HTTPError as exc:
             self.reply(404 if exc.code == 404 else 502, {"error": f"Jenkins answered {exc.code}"})

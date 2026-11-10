@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Public chat (Phase 9b). Runs ON the Raspberry Pi as root (scripts/21-public-chat.sh copies it over).
+# Public site backend (Phase 9b). Runs ON the Raspberry Pi as root (scripts/21-public-chat.sh copies it over).
 #   public-setup.sh install   Tailscale + nginx's JavaScript module, the public gateway on 127.0.0.1:8090,
 #                             then a public HTTPS address with Tailscale Funnel (asks you to log in once)
 #   public-setup.sh off       stop Funnel (the public site's chat goes quiet; nothing else changes)
 #   public-setup.sh remove    stop Funnel and remove the public gateway (Tailscale stays installed)
 #
 # The path:  visitor → Netlify (signs the request) → Tailscale Funnel (TLS) → this Pi, nginx 127.0.0.1:8090
-#            → checks Netlify's signature, allows only the 4 chat paths, limits each visitor
+#            → checks Netlify's signature, allows only the public paths (chat, Pulse, Capacity, Backups
+#              view, Pipeline + logs, Be a Dev, theme.json; never "Back up now"), limits each visitor
 #            → https://<server>:443 as chatbot.local (prod), adding the edge secret and the visitor's address.
 # If the server is asleep, /api/status and /api/wake go to the waker, which sends the magic packet.
 set -euo pipefail
@@ -32,8 +33,9 @@ map \$http_x_nf_client_connection_ip \$qwenops_visitor {
   ""      \$qwenops_xff;
   default \$http_x_nf_client_connection_ip;
 }
-limit_req_zone \$qwenops_visitor zone=qwenops_chat:1m rate=6r/m;
-limit_req_zone \$qwenops_visitor zone=qwenops_api:1m rate=60r/m;
+# Chat: 10 a minute per visitor in chat-api (as at home); the Pi only stops floods. Pages poll every 3-10 s.
+limit_req_zone \$qwenops_visitor zone=qwenops_chat:1m rate=12r/m;
+limit_req_zone \$qwenops_visitor zone=qwenops_api:1m rate=180r/m;
 limit_conn_zone \$server_name zone=qwenops_all:1m;
 
 server {
@@ -60,20 +62,26 @@ server {
   default_type application/json;
 
   location = /api/chat {
-    limit_req zone=qwenops_chat burst=3 nodelay;
+    limit_req zone=qwenops_chat burst=5 nodelay;
     limit_conn qwenops_all 6;                 # at most 6 public chats streaming at once
     proxy_pass https://$1;
     proxy_buffering off;                      # stream the reply word by word
     proxy_read_timeout 120s;
     error_page 502 504 = @asleep_json;
   }
-  location = /api/history {
-    limit_req zone=qwenops_api burst=20 nodelay;
+  # Read-only pages and Be a Dev. /api/backups/run ("Back up now") is not in the list: home only.
+  location ~ ^/api/(history|pulse|capacity|backups|backups/log|pipeline|pipeline/log|themes|theme)\$ {
+    limit_req zone=qwenops_api burst=60 nodelay;
+    proxy_pass https://$1;
+    error_page 502 504 = @asleep_json;
+  }
+  location = /theme.json {                    # the public site shows prod's live colour
+    limit_req zone=qwenops_api burst=60 nodelay;
     proxy_pass https://$1;
     error_page 502 504 = @asleep_json;
   }
   location ~ ^/api/(status|wake)\$ {
-    limit_req zone=qwenops_api burst=20 nodelay;
+    limit_req zone=qwenops_api burst=60 nodelay;
     proxy_pass https://$1;
     error_page 502 504 = @waker;              # server asleep: the waker answers and wakes it
   }

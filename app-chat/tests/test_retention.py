@@ -21,12 +21,18 @@ def conn():
         yield c
 
 
-def test_only_first_50_users_are_stored(conn):
+def test_51st_user_replaces_the_first_user_and_their_chats(conn):
     for i in range(50):
-        conn.execute("INSERT INTO users (id) VALUES (%s)", (f"u{i}",))
-    with pytest.raises(psycopg.errors.RaiseException, match="user_limit_reached"):
-        conn.execute("INSERT INTO users (id) VALUES ('u50')")
-    assert conn.execute("SELECT count(*) FROM users").fetchone()[0] == 50
+        conn.execute("INSERT INTO users (id, created_at) VALUES (%s, now() - make_interval(mins => %s))",
+                     (f"u{i}", 100 - i))   # u0 is the oldest
+    conn.execute("INSERT INTO chats (user_id, prompt, reply) VALUES ('u0', 'hi', 'hello')")
+    conn.execute("INSERT INTO users (id) VALUES ('u50')")
+    ids = {r[0] for r in conn.execute("SELECT id FROM users").fetchall()}
+    assert len(ids) == 50 and "u50" in ids and "u0" not in ids and "u1" in ids
+    assert conn.execute("SELECT count(*) FROM chats WHERE user_id = 'u0'").fetchone()[0] == 0
+    conn.execute("INSERT INTO users (id) VALUES ('u51')")          # next one replaces u1
+    ids = {r[0] for r in conn.execute("SELECT id FROM users").fetchall()}
+    assert len(ids) == 50 and "u1" not in ids and "u2" in ids
 
 
 def test_only_last_15_chats_per_user_are_kept(conn):
