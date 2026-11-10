@@ -10,6 +10,7 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
+ 16  10 Nov 2026   Be a Dev: each environment changes its own colour   Built, tests passed
  15  9 Nov 2026    Phase 9: public showcase on Netlify                 Built; Netlify link pending
  14  9 Nov 2026    Architecture page brought up to date (phases 1-8)   Done on dev
  13  9 Nov 2026    Phase 8: live Pipeline page, real Be a Dev deploys  Done, checks passed
@@ -29,6 +30,40 @@ SUMMARY
 
 DETAILS
 -------
+
+16. Be a Dev: each environment changes its own colour
+
+Date:        10 November 2026
+Commands:    ./scripts/19-theme.sh show (now lists dev, qa and prod)
+Why:         picking a colour on qa's or prod's Be a Dev page changed dev's colour: the
+             theme-deploy job only knew one target (Issue 48).
+Changed:     app-chat/app/main.py (+2 tests), ci/pipeline-events/pipeline_events.py,
+             ci/theme-deploy.Jenkinsfile, k8s/ci/20-jenkins.yaml, scripts/19-theme.sh,
+             scripts/06-deploy.sh, app-ui/public/dev/, app-ui/public/pipeline/pipeline.js,
+             Architecture page, README
+
+How it works now:
+- chat-api adds its own environment (APP_ENV: dev, qa or prod) to the request. The browser
+  only sends the colour, so a page can't change another environment.
+- pipeline-events passes COLOR and ENV to the theme-deploy job (it refuses any other env).
+- The job's stages are Checkout, Validate, Deploy, Verify. Deploy saves the colour in
+  ConfigMap chatbot-theme in chatbot-<env> and upgrades only chatbot-<env> (Helm
+  --reuse-values --set theme=<colour> --atomic). Verify reads that site's theme.json
+  (dev.chatbot.local, qa.chatbot.local or chatbot.local).
+- If a pipeline deploy is upgrading the same release, the colour job waits for it (up to
+  5 minutes) instead of failing on Helm's lock.
+- Every pipeline deploy (scripts/06-deploy.sh) keeps that environment's chosen colour, not
+  only dev's.
+- The Be a Dev page names its environment ("Ship it to qa"); the Pipeline page shows where
+  each colour went ("#3 · rose → prod").
+- Unchanged: one colour change per visitor every 5 minutes, one colour deploy at a time.
+  Prod colour changes don't need the admin approval: only the colour changes, from the
+  allowed list, and the UI pods roll one at a time (2 replicas, disruption budget).
+
+Result:      chat-api tests: 25 passed (new: qa and prod requests carry their env; no colour
+             deploys outside the three environments). Jenkins reads ci/theme-deploy.Jenkinsfile
+             from GitHub, so the end-to-end test follows the push.
+Issues:      Issue 48 in docs/capacity-journal-issues.md
 
 15. Phase 9: public showcase on Netlify
 

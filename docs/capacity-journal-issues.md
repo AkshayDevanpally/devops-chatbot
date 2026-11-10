@@ -27,6 +27,7 @@ Problems hit on 4–5 November 2026:
 - Issues 43–46 (9 November): Phase 8, the live Pipeline page and real "Be a Dev" deploys: a security scan
   failure in the Jenkins image, a new job missing after a restart, a test that lost its cookie, and slips while testing.
 - Issue 47 (9 November): Phase 9, getting ready to publish the site on Netlify.
+- Issue 48 (10 November): a colour picked on qa's or prod's Be a Dev page changed dev.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -77,6 +78,7 @@ Problems hit on 4–5 November 2026:
 | 45 | Rate-limit test got 409 instead of 429: the error response dropped the visitor cookie | Tests | Fixed |
 | 46 | Mistakes while testing Phase 8 (curl brackets, quoting, wrong stage id, sed miss, early check) | Process | Fixed |
 | 47 | Public showcase: MAC address and a home path in the Journal data; a latent Be a Dev crash; no browser check | Privacy / frontend | Fixed (browser check open) |
+| 48 | Be a Dev on qa or prod changed dev's colour | CI / app | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -1229,4 +1231,23 @@ and data file fetched (all 200). Rendering the pages in a headless Chrome contai
 permission check** (a third-party image with host networking), so the pages haven't been looked at in a browser
 yet. **Next step:** `make showcase-preview` and open http://127.0.0.1:8088 (in VS Code Remote, forward port 8088),
 or look at the Netlify deploy preview once connected.
+
+
+### Issue 48 — A colour picked on qa's or prod's Be a Dev page changed dev
+
+**Date:** found 10 November 2026 by trying Be a Dev on prod and qa.
+
+**Symptom:** on `https://chatbot.local/dev/` (prod) and `https://qa.chatbot.local/dev/`, shipping a colour said it
+was on its way, the theme-deploy run passed, but prod and qa kept their colours; dev changed instead.
+
+**Cause:** a design gap from Phase 8. Every layer assumed dev: chat-api sent only the colour, the theme-deploy job had
+only a `COLOR` parameter, and `scripts/19-theme.sh` always used `chatbot-dev` and checked `dev.chatbot.local`. The
+tests and the Phase 8 end-to-end test were all run from dev's page, so nothing caught it.
+
+**Fix (update 16):** chat-api adds its own environment (`APP_ENV`) to the request; pipeline-events passes `ENV` to the
+job (dev, qa or prod only); the job and `19-theme.sh` deploy and verify that environment; `06-deploy.sh` keeps each
+environment's chosen colour on pipeline deploys. The colour job also waits while a pipeline deploy is upgrading the
+same release. New tests check that qa's and prod's requests carry their own environment.
+
+**Lesson:** when a feature is on every environment's site, test it from each environment, not only dev.
 

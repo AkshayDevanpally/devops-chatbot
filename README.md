@@ -177,12 +177,15 @@ browser ──► chat-api ──► pipeline-events (ns ci) ──► Jenkins
   them, a banner shows when a build waits for the prod approval, and clicking a stage opens its log (last
   400 lines, secrets redacted). It checks every 3 s while something runs, every 10 s otherwise. If Jenkins
   can't be reached it falls back to the old demo build.
-- **Be a Dev** (`/dev/`): picking a colour starts the `theme-deploy` job, which checks the colour against the
-  allowed list (teal, indigo, rose, amber, emerald, slate), saves it in ConfigMap `chatbot-theme` in
-  `chatbot-dev`, runs `helm upgrade --reuse-values --set theme=…` on **dev only**, and checks
-  `https://dev.chatbot.local/theme.json`. The page then jumps to the live run (~40 s). Limits: one change per
-  visitor every 5 minutes, and a new request is refused (409) while a colour deploy is queued or running.
-  Pipeline deploys keep the chosen colour (`scripts/06-deploy.sh` reads the ConfigMap).
+- **Be a Dev** (`/dev/`): **each environment's page changes only that environment's colour** (dev, qa or prod).
+  chat-api adds its own environment to the request (the browser can't choose it), and the `theme-deploy` job
+  (parameters `COLOR` and `ENV`) checks the colour against the allowed list (teal, indigo, rose, amber, emerald,
+  slate), saves it in ConfigMap `chatbot-theme` in `chatbot-<env>`, runs
+  `helm upgrade --reuse-values --set theme=…` on that release only, and checks that site's `/theme.json`.
+  If a pipeline deploy is upgrading the same release, it waits (up to 5 min). The page then jumps to the live run
+  (~40 s). Limits: one change per visitor every 5 minutes, and one colour deploy at a time (409 while one is
+  queued or running). Pipeline deploys keep each environment's chosen colour (`scripts/06-deploy.sh` reads the
+  ConfigMap).
 - Security: chat-api has no Jenkins access; it only talks to pipeline-events, which only chat-api can reach and
   which can only reach Jenkins (NetworkPolicies). Job names, build and stage numbers are checked before they
   are passed on.
@@ -190,7 +193,7 @@ browser ──► chat-api ──► pipeline-events (ns ci) ──► Jenkins
   reloads Jenkins once if a newly added job is missing.
 
 ```bash
-./scripts/19-theme.sh show               # dev's chosen colour, when and by which build
+./scripts/19-theme.sh show               # each environment's chosen colour, when and by which build
 ```
 
 ## Pulse — the live dashboard (`/pulse/`)
@@ -239,7 +242,7 @@ kubectl get pods -A                      # everything
 kubectl top pods -A                      # RAM/CPU per pod (metrics-server is built into k3s)
 kubectl -n chatbot-dev describe quota    # how full each environment is
 helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n chatbot-prod
-./scripts/19-theme.sh show               # dev's "Be a Dev" colour
+./scripts/19-theme.sh show               # each environment's "Be a Dev" colour
 kubectl -n ci logs deploy/pipeline-events  # the Pipeline page's link to Jenkins
 ```
 
