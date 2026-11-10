@@ -1,7 +1,7 @@
 # QwenOps — local build (Docker → Kubernetes)
 
 A small Qwen chatbot (Ollama, `qwen2.5:0.5b`) with a FastAPI backend, a static UI, Postgres history
-(first 50 users, last 15 chats each), deployed to **k3s** in **dev / qa / prod** namespaces with
+(latest 50 users, last 15 chats each; a new user replaces the first one), deployed to **k3s** in **dev / qa / prod** namespaces with
 security controls on by default. Sized for **16 GB RAM / 4 cores**.
 
 ```
@@ -41,7 +41,7 @@ browser ─HTTPS─► Traefik ingress (k3s, cert from cert-manager) ──► u
 ```bash
 make test        # ruff + 3 pytest cases against a throwaway Postgres
 ```
-Proves the database refuses the 51st user and keeps only each user's newest 15 chats.
+Proves a 51st user replaces the first user created (and their chats) and that only each user's newest 15 chats are kept.
 
 ## Step 2 — Quick check with Docker Compose (optional, ~5 min)
 
@@ -266,21 +266,25 @@ make showcase-build      # build dist/ exactly as Netlify does
 make showcase-preview    # build and serve it on http://127.0.0.1:8088
 ```
 
-### Live chat on the public site (Phase 9b)
+### The public site goes live (Phase 9b)
 
 ```
-visitor → Netlify site → /api/chat, /api/history, /api/status, /api/wake   (signed with QWENOPS_PROXY_SECRET)
+visitor → Netlify site → /api/... and /theme.json   (Netlify signs each request with QWENOPS_PROXY_SECRET)
         → Tailscale Funnel (public HTTPS, opened from home: no router change)
-        → Raspberry Pi, nginx 127.0.0.1:8090: checks Netlify's signature, only those 4 paths, limits per visitor
+        → Raspberry Pi, nginx 127.0.0.1:8090: checks Netlify's signature, public paths only, flood limits
         → prod chat-api as chatbot.local, with the edge secret and the visitor's address
 ```
 
-- **Only chat is public.** Pulse, backups, pipeline and Be a Dev stay home-only (refused on the Pi and in chat-api).
-- **Public visitors:** 4 messages a minute each (Pi: 6), 30 a minute for all of them together, at most 6 replies
-  streaming at once, always guests (they never take one of the 50 places with saved history), replies up to 256
-  tokens (Netlify's proxy gives up after about 26 s). The usual "busy, try again" protection applies on top.
-- **Asleep?** The Pi answers `/api/status` and `/api/wake` itself and wakes the server, as at home. So public
-  visitors can wake it too.
+- **What the public gets, as at home:** chat with saved history (last 15 chats, latest 50 visitors), Pulse,
+  Capacity, the Backups panel (view only), the Pipeline page with logs, and Be a Dev (changes **prod's** colour; the
+  public site shows prod's live colour). Same limits as at home (10 messages a minute per visitor).
+- **Different from home:** "Back up now" is refused (Pi and chat-api); at most 6 colour deploys an hour from the
+  public site in total; pipeline logs also blank private IPs, internal host names and home paths, and the
+  security-scan log isn't shown. Per-visitor limits use the visitor's real address (passed by the Pi).
+- **50 users, then first in, first out:** a new user replaces the first user created, and that user's chats are
+  deleted (at home too: it's one database). A flood of new visitors can therefore remove everyone's history.
+- **Asleep?** The Pi answers `/api/status` and `/api/wake` and wakes the server. Other requests get "waking up,
+  try again" until it's back. Public visitors can wake the server.
 - Anyone calling the Funnel address directly is refused (403): only requests signed by your Netlify site get in.
   chat-api trusts the visitor address only from requests carrying the edge secret (`EDGE_SECRET`).
 
@@ -288,14 +292,14 @@ visitor → Netlify site → /api/chat, /api/history, /api/status, /api/wake   (
 1. Create a free account at tailscale.com.
 2. `make public-chat-setup`: makes the secrets, sets up the Pi (asks for the Pi's sudo password, shows a Tailscale
    login link for the Pi and, the first time, a link to allow HTTPS/Funnel) and prints the public address.
-3. `make public-chat-netlify`: writes the chat routes into `netlify.toml`; commit and push.
+3. `make public-chat-netlify`: writes the routes into `netlify.toml` and sets `PUBLIC_LIVE = "on"`; commit and push.
 4. In Netlify: Site configuration → Environment variables → add `QWENOPS_PROXY_SECRET` (all scopes) with the value from
    `make public-chat-secret` (run it yourself), then redeploy.
 5. `make public-chat-test SITE=https://<your-site>.netlify.app`.
 
 ```bash
 make public-chat-status   # Funnel address and state on the Pi
-make public-chat-off      # close public chat at once (Funnel off); public-chat-setup opens it again
+make public-chat-off      # take the public site offline at once (Funnel off); it falls back to errors, not data
 ```
 
 ## Overload protection

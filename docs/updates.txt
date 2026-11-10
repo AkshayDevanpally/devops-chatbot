@@ -10,7 +10,7 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
- 17  10 Nov 2026   Phase 9b: live chat on the public site (Pi)         Built; needs Tailscale login
+ 17  10 Nov 2026   Phase 9b: the public site goes live (Pi, Funnel)    Built; needs Tailscale login
  16  10 Nov 2026   Be a Dev: each environment changes its own colour   Done, tested qa/prod
  15  9 Nov 2026    Phase 9: public showcase on Netlify                 Built; Netlify link pending
  14  9 Nov 2026    Architecture page brought up to date (phases 1-8)   Done on dev
@@ -32,48 +32,62 @@ SUMMARY
 DETAILS
 -------
 
-17. Phase 9b: live chat on the public site, through the Raspberry Pi
+17. Phase 9b: the public site goes live, through the Raspberry Pi
 
 Date:        10 November 2026
 Commands:    make public-chat-setup, public-chat-netlify, public-chat-secret, public-chat-test,
              public-chat-status, public-chat-off (scripts/21-public-chat.sh)
-Why:         the public (Netlify) site could only show the chat, not use it. This lets visitors
-             chat with the home model without opening the router.
-Changed:     app-chat/app/main.py and config.py (+5 tests), pi/public-setup.sh, pi/public/verify.js
-             (new), scripts/21-public-chat.sh (new), scripts/netlify-build.py, netlify.toml,
-             app-ui/public/common.js and chat.js, Makefile, README, Architecture page
+Why:         the public (Netlify) site was a static copy. Now visitors use the real thing: chat with
+             saved history, Pulse, Capacity, the Backups panel (view only), the Pipeline page with
+             logs, and Be a Dev, without opening the router.
+Changed:     app-chat/app/main.py, config.py, schema.sql (+ tests), ci/pipeline-events (public log
+             trimming), pi/public-setup.sh and pi/public/verify.js (new), scripts/21-public-chat.sh
+             (new), scripts/netlify-build.py, netlify.toml, app-ui/public (common.js, chat page,
+             Be a Dev, Pulse, Capacity, Backups panel), Makefile, README, Architecture page
 
 The path:
-  visitor → Netlify site (/api/chat, /api/history, /api/status, /api/wake; Netlify signs each
-  request with QWENOPS_PROXY_SECRET) → Tailscale Funnel (public HTTPS, opened from home) →
-  Pi nginx 127.0.0.1:8090 → prod chat-api as chatbot.local.
+  visitor → Netlify site (/api/... and /theme.json; Netlify signs each request with
+  QWENOPS_PROXY_SECRET) → Tailscale Funnel (public HTTPS, opened from home) → Pi nginx
+  127.0.0.1:8090 → prod chat-api as chatbot.local.
 
 On the Pi (nginx with its JavaScript module):
-- checks Netlify's signature (HS256, issuer netlify, not expired); anything else gets 403, so
-  the Funnel address can't be used directly;
-- only the 4 chat paths (everything else 404); 6 chat messages a minute per visitor, at most 6
-  replies streaming at once;
+- checks Netlify's signature (HS256, issuer netlify, not expired); anything else gets 403, so the
+  Funnel address can't be used directly;
+- only the public paths; "Back up now" (/api/backups/run), metrics and anything else get 404;
+- flood limits per visitor (chat 12 a minute, pages 180 a minute), at most 6 replies streaming;
 - adds the edge secret and the visitor's address; checks prod's certificate against the home CA;
-- server asleep: /api/status and /api/wake go to the waker, which wakes it (as at home).
+- server asleep: /api/status and /api/wake go to the waker, which wakes it; the rest answer
+  "waking up, try again".
 
-In chat-api, a request is public only with the right edge secret. Public visitors:
-- 4 messages a minute each, 8 per address, 30 a minute for all public visitors together;
-- always guests: no database call for them, they never take one of the 50 places with history;
-- replies up to 256 tokens (Netlify's proxy gives up after about 26 s; the reply starts at once);
-- can only reach the chat paths (404 for the rest), as a second guard behind the Pi.
+In chat-api, a request is public only with the right edge secret. Public visitors get the home
+rules (10 messages a minute, saved history, 512-token replies), and:
+- "Back up now" is refused (404), as a second guard behind the Pi;
+- at most 6 colour deploys an hour from the public site in total (plus 1 per visitor every 5 min);
+  Be a Dev there changes prod's colour, and the public site shows prod's live colour;
+- pipeline logs are trimmed by pipeline-events: private IPs, MAC addresses, internal service names
+  and home paths blanked; the security-scan stage's log isn't shown;
+- rate limits use the visitor's real address, not the Pi's.
 
-The public site turns chat on with PUBLIC_CHAT = "on" in netlify.toml (written by
-make public-chat-netlify together with the routes); the showcase line then says chat is live.
+History rule changed for everyone (one database): at 50 users, a new user replaces the FIRST user
+created, whose chats are deleted (before: the 51st user was refused and chatted as a guest). Asked
+for on 10 November; the risk that a flood of new visitors removes everyone's history, including
+the family's, was explained and accepted.
 
-Result so far: chat-api tests 30 passed (new: only the right secret makes a request public; public
-             visitors reach only chat; history is empty without touching the database; replies are
-             short and nothing is stored; stricter limits). The Pi's nginx config and signature check
-             were tested in a sealed nginx container: unsigned, wrong-key, expired and wrong-issuer
-             requests 403; a signed one passes; other paths 404; with the server unreachable the
-             waker answers status. The netlify.toml generator was tested on a copy (twice: one block,
-             valid TOML, before the catch-all rule).
-Waiting for: a Tailscale account and login for the Pi (make public-chat-setup), then the Netlify
-             secret and a push.
+Problems weighed before building (explained to the owner): strangers redeploying prod's web pods
+(capped), logs showing internals and known weaknesses (trimmed), Pulse showing when the house is
+using the server or asleep, guessing the backup password (button hidden), history wiped by floods
+(accepted), long replies cut by Netlify's ~26 s proxy limit (to be measured), load and power (the
+server will sleep less), and storing strangers' chats at home and in the S3 backups.
+
+Result so far: chat-api tests 29 passed (new: only the right secret makes a request public; the
+             visitor address is used only then; "Back up now" and unlisted paths refused; public
+             colour deploys capped per hour while home ones aren't; public logs ask for the trimmed
+             version; a 51st user replaces the first one and their chats, against a real Postgres).
+             The Pi's config was tested in a sealed nginx container: unsigned/wrong/expired/
+             wrong-issuer requests 403; every public path passes; "Back up now", readyz and metrics
+             404; with the server unreachable the waker answers status.
+Waiting for: a Tailscale account and login for the Pi (make public-chat-setup), the Netlify secret,
+             then pushes (prod needs "Ship it" for the new chat-api and the history rule).
 
 16. Be a Dev: each environment changes its own colour
 
