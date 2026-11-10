@@ -266,6 +266,38 @@ make showcase-build      # build dist/ exactly as Netlify does
 make showcase-preview    # build and serve it on http://127.0.0.1:8088
 ```
 
+### Live chat on the public site (Phase 9b)
+
+```
+visitor → Netlify site → /api/chat, /api/history, /api/status, /api/wake   (signed with QWENOPS_PROXY_SECRET)
+        → Tailscale Funnel (public HTTPS, opened from home: no router change)
+        → Raspberry Pi, nginx 127.0.0.1:8090: checks Netlify's signature, only those 4 paths, limits per visitor
+        → prod chat-api as chatbot.local, with the edge secret and the visitor's address
+```
+
+- **Only chat is public.** Pulse, backups, pipeline and Be a Dev stay home-only (refused on the Pi and in chat-api).
+- **Public visitors:** 4 messages a minute each (Pi: 6), 30 a minute for all of them together, at most 6 replies
+  streaming at once, always guests (they never take one of the 50 places with saved history), replies up to 256
+  tokens (Netlify's proxy gives up after about 26 s). The usual "busy, try again" protection applies on top.
+- **Asleep?** The Pi answers `/api/status` and `/api/wake` itself and wakes the server, as at home. So public
+  visitors can wake it too.
+- Anyone calling the Funnel address directly is refused (403): only requests signed by your Netlify site get in.
+  chat-api trusts the visitor address only from requests carrying the edge secret (`EDGE_SECRET`).
+
+**Turning it on (once):**
+1. Create a free account at tailscale.com.
+2. `make public-chat-setup`: makes the secrets, sets up the Pi (asks for the Pi's sudo password, shows a Tailscale
+   login link for the Pi and, the first time, a link to allow HTTPS/Funnel) and prints the public address.
+3. `make public-chat-netlify`: writes the chat routes into `netlify.toml`; commit and push.
+4. In Netlify: Site configuration → Environment variables → add `QWENOPS_PROXY_SECRET` (all scopes) with the value from
+   `make public-chat-secret` (run it yourself), then redeploy.
+5. `make public-chat-test SITE=https://<your-site>.netlify.app`.
+
+```bash
+make public-chat-status   # Funnel address and state on the Pi
+make public-chat-off      # close public chat at once (Funnel off); public-chat-setup opens it again
+```
+
 ## Overload protection
 
 Each chat-api pod streams one reply at a time from the model and keeps a short line (dev and qa 2, prod 4,
