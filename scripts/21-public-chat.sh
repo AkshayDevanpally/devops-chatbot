@@ -101,7 +101,7 @@ test_public() {
   st=$(curl -s -m 20 -H "X-Nf-Sign: $tok" "$url/api/status")
   [[ $st == *'"ready"'* ]] && ok "signed /api/status reaches prod: $st" || bad "signed status: $st"
   c=$(code -H "X-Nf-Sign: $tok" "$url/api/readyz"); [[ $c == 404 ]] && ok "other paths refused on the Pi (404)" || bad "/api/readyz got $c, not 404"
-  [[ $(code -H "X-Nf-Sign: $tok" -X POST "$url/api/backups/run") == 404 ]] && ok "\"Back up now\" is home only (404)" || bad "/api/backups/run not refused"
+  [[ $(code -H "X-Nf-Sign: $tok" -X POST -H 'Content-Type: application/json' -d '{"password":"x"}' "$url/api/backups/run") == 404 ]] && ok "\"Back up now\" is home only (404)" || bad "/api/backups/run not refused"
   for p in /api/pulse?range=1h /api/capacity /api/backups /api/pipeline?job=chatbot /api/themes /theme.json; do
     [[ $(code -H "X-Nf-Sign: $tok" "$url$p") == 200 ]] && ok "public $p" || bad "public $p"
   done
@@ -114,7 +114,9 @@ test_public() {
     out=$(curl -sN -m 90 -c /dev/null -H 'Content-Type: application/json' -d '{"message":"Say hello in five words."}' "$site/api/chat")
     [[ $out == *"event: done"* ]] && ok "chat through Netlify streams a full reply" || bad "chat through Netlify: ${out:0:200}"
     [[ $(code "$site/api/pulse?range=1h") == 200 ]] && ok "$site/api/pulse through Netlify" || bad "$site/api/pulse"
-    [[ $(code -X POST "$site/api/backups/run") == 404 ]] && ok "$site: \"Back up now\" not available (404)" || bad "$site/api/backups/run answered"
+    # Sent like the real button (JSON body); an empty POST gets 400 from Netlify itself.
+    c=$(code -X POST -H 'Content-Type: application/json' -d '{"password":"x"}' "$site/api/backups/run")
+    [[ $c == 404 ]] && ok "$site: \"Back up now\" not available (404)" || bad "$site/api/backups/run got $c, not 404"
   fi
   return $fail
 }

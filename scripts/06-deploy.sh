@@ -33,11 +33,13 @@ if [[ $chosen =~ ^(teal|indigo|rose|amber|emerald|slate)$ ]]; then
   THEME_ARGS=(--set theme="$chosen"); echo "==> $ENV keeps its chosen colour: $chosen"
 fi
 
-helm lint helm/chatbot -f "helm/chatbot/values-$ENV.yaml" --set image.tag="$TAG"
+# --set-string: a commit id can be all digits (5151604). With --set Helm stores it as a number, and a later
+# --reuse-values upgrade (Be a Dev) renders it as 5.151604e+06, which isn't a valid label (Issue 49).
+helm lint helm/chatbot -f "helm/chatbot/values-$ENV.yaml" --set-string image.tag="$TAG"
 helm upgrade --install "chatbot-$ENV" helm/chatbot \
   --namespace "chatbot-$ENV" \
   -f "helm/chatbot/values-$ENV.yaml" \
-  --set image.tag="$TAG" \
+  --set-string image.tag="$TAG" \
   --set burst.enabled="$BURST_ON" "${THEME_ARGS[@]}" \
   --atomic --wait --timeout 5m
 

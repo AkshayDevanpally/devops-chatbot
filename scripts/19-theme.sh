@@ -44,8 +44,14 @@ case "$CMD" in
       --from-literal=requested-at="$(date -u +%FT%TZ)" --from-literal=build="${BUILD_NUMBER:-manual}" \
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
     wait_for_release
-    echo "==> helm upgrade chatbot-$ENV: theme=$COLOR (everything else unchanged)"
-    helm upgrade "chatbot-$ENV" helm/chatbot -n "$NS" --reuse-values --set theme="$COLOR" --atomic --wait --timeout 3m
+    # Pass the running image tag again, as text: a release deployed with an all-digit commit id may have it
+    # stored as a number, which --reuse-values would render as 5.151604e+06 (Issue 49).
+    tag=$(helm get values "chatbot-$ENV" -n "$NS" -o json | python3 -I -c 'import json,sys
+t = json.load(sys.stdin).get("image", {}).get("tag")
+print(int(t) if isinstance(t, float) and t.is_integer() else ("" if t is None else t))')
+    echo "==> helm upgrade chatbot-$ENV: theme=$COLOR (image ${tag:-unchanged}, everything else unchanged)"
+    helm upgrade "chatbot-$ENV" helm/chatbot -n "$NS" --reuse-values --set theme="$COLOR" \
+      ${tag:+--set-string image.tag="$tag"} --atomic --wait --timeout 3m
     kubectl -n "$NS" rollout status deployment/ui --timeout=120s
     kubectl -n "$NS" get pods -l app.kubernetes.io/component=ui -o wide ;;
   verify)
