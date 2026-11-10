@@ -96,11 +96,11 @@ test_public() {
   tok=$(sign "$(secret public-chat NETLIFY_SECRET)")
   fail=0; ok() { echo "PASS  $1"; }; bad() { echo "FAIL  $1"; fail=1; }
   code() { curl -s -m 20 -o /dev/null -w '%{http_code}' "$@"; }
-  [[ $(code "$url/api/status") == 403 ]] && ok "Funnel address refuses unsigned requests" || bad "unsigned request not refused"
-  [[ $(code -H "X-Nf-Sign: $(sign wrong-secret)" "$url/api/status") == 403 ]] && ok "wrong signature refused" || bad "wrong signature not refused"
+  c=$(code "$url/api/status"); [[ $c == 403 ]] && ok "Funnel address refuses unsigned requests" || bad "unsigned request got $c, not 403"
+  c=$(code -H "X-Nf-Sign: $(sign wrong-secret)" "$url/api/status"); [[ $c == 403 ]] && ok "wrong signature refused" || bad "wrong signature got $c, not 403"
   st=$(curl -s -m 20 -H "X-Nf-Sign: $tok" "$url/api/status")
   [[ $st == *'"ready"'* ]] && ok "signed /api/status reaches prod: $st" || bad "signed status: $st"
-  [[ $(code -H "X-Nf-Sign: $tok" "$url/api/readyz") == 404 ]] && ok "other paths refused on the Pi (404)" || bad "/api/readyz not refused"
+  c=$(code -H "X-Nf-Sign: $tok" "$url/api/readyz"); [[ $c == 404 ]] && ok "other paths refused on the Pi (404)" || bad "/api/readyz got $c, not 404"
   [[ $(code -H "X-Nf-Sign: $tok" -X POST "$url/api/backups/run") == 404 ]] && ok "\"Back up now\" is home only (404)" || bad "/api/backups/run not refused"
   for p in /api/pulse?range=1h /api/capacity /api/backups /api/pipeline?job=chatbot /api/themes /theme.json; do
     [[ $(code -H "X-Nf-Sign: $tok" "$url$p") == 200 ]] && ok "public $p" || bad "public $p"
