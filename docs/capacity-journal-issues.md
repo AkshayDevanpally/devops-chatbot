@@ -28,6 +28,8 @@ Problems hit on 4–5 November 2026:
   failure in the Jenkins image, a new job missing after a restart, a test that lost its cookie, and slips while testing.
 - Issue 47 (9 November): Phase 9, getting ready to publish the site on Netlify.
 - Issue 48 (10 November): a colour picked on qa's or prod's Be a Dev page changed dev.
+- Issues 49–50 (10 November): going live on the public site: an all-digit commit id broke colour deploys, and the
+  things that went wrong while testing the public path.
 
 | # | Issue | Area | Status |
 |---|---|---|---|
@@ -79,6 +81,8 @@ Problems hit on 4–5 November 2026:
 | 46 | Mistakes while testing Phase 8 (curl brackets, quoting, wrong stage id, sed miss, early check) | Process | Fixed |
 | 47 | Public showcase: MAC address and a home path in the Journal data; a latent Be a Dev crash; no browser check | Privacy / frontend | Fixed (browser check open) |
 | 48 | Be a Dev on qa or prod changed dev's colour | CI / app | Fixed |
+| 49 | All-digit commit id (5151604) stored as a number: every colour deploy failed with an invalid label | CI / Helm | Fixed |
+| 50 | Going live: Netlify visitor login, false test failures, quoting slip again | Process | Fixed |
 
 ### Issue 1 — Journal entries stayed invisible after load
 
@@ -1250,4 +1254,52 @@ environment's chosen colour on pipeline deploys. The colour job also waits while
 same release. New tests check that qa's and prod's requests carry their own environment.
 
 **Lesson:** when a feature is on every environment's site, test it from each environment, not only dev.
+
+
+### Issue 49 — An all-digit commit id broke every colour deploy
+
+**Date:** 10 November 2026, the first Be a Dev test from the public site (theme-deploy #11, slate → prod).
+
+**Symptom:** the job passed Validate, then Deploy failed and Helm rolled back (prod unharmed):
+
+```text
+==> helm upgrade chatbot-prod: theme=slate (everything else unchanged)
+Error: UPGRADE FAILED: release chatbot-prod failed, and has been rolled back due to atomic being set:
+cannot patch "ingress-to-ui-and-api" with kind NetworkPolicy: ... metadata.labels: Invalid value: "5.151604e+06":
+a valid label must be an empty string or consist of alphanumeric characters ...
+```
+
+**Cause:** the latest commit's short id was `5151604`, all digits. The pipeline deploys with `--set image.tag=5151604`,
+and Helm's `--set` turns digits into a number, so the release stored `image.tag: 5151604` as an int (dev, qa and prod
+all did). The colour job upgrades with `--reuse-values`; Helm reads the stored values back as JSON, where the number
+becomes a float, and the chart's version label rendered it as `5.151604e+06`, which Kubernetes refuses. Any colour
+change on any environment would have failed until the next commit with a letter in its id. About 1 in 40 short
+commit ids are all digits, so this was bound to happen.
+
+**Fix:** `scripts/06-deploy.sh` now uses `--set-string image.tag=...`, so the tag is always stored as text; and
+`scripts/19-theme.sh` passes the release's current tag again with `--set-string` (turning a stored number back into
+digits), so colour changes also work on releases deployed before the fix. Tested on dev: the deploy went through,
+verified, and dev's stored tag is now the text `'5151604'`.
+
+**Lesson:** pass anything that only looks like a number (ids, versions, ZIP codes) to Helm with `--set-string`.
+
+
+### Issue 50 — Going live on the public site: what went wrong while testing
+
+**Date:** 10 November 2026.
+
+- **The site needed a Netlify login.** Every request, even `config.js`, got a "Login Redirect" (401) to
+  `app.netlify.com/edge-access`: the site had Netlify's Visitor access protection on. The owner set it to public.
+- **False failures in the first Funnel test.** "Unsigned request not refused" and "/api/readyz not refused" failed,
+  but the Pi's log showed every unsigned request answered 403. The first connections to a new Funnel address were
+  still being set up (certificate), so curl got no status at all. The test now prints the code it got; a rerun
+  passed 12 of 12.
+- **"Back up now" through Netlify "answered".** The test sent an empty POST, which Netlify itself rejects with 400
+  before routing. A request like the real button (JSON body) gets 404 and never reaches the Pi (its log shows only
+  the direct tests). The test now sends a body; 16 of 16 passed.
+- **Quoting slip, a third time (Issues 31 and 46).** A Python one-liner with escaped quotes inside a bash string,
+  to list the colour runs, failed with a syntax error in a loop. Redone with a script file. The rule stays: quoted
+  heredocs or files for anything with quotes.
+- **Found by the tests, not a slip:** an internet crawler reached the Funnel address within minutes and got 403,
+  which is why the Netlify signature check exists.
 

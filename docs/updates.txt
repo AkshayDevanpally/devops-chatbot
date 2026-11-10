@@ -10,7 +10,7 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
- 17  10 Nov 2026   Phase 9b: the public site goes live (Pi, Funnel)    Built; needs Tailscale login
+ 17  10 Nov 2026   Phase 9b: the public site goes live (Pi, Funnel)    Live, 16 of 16 checks
  16  10 Nov 2026   Be a Dev: each environment changes its own colour   Done, tested qa/prod
  15  9 Nov 2026    Phase 9: public showcase on Netlify                 Built; Netlify link pending
  14  9 Nov 2026    Architecture page brought up to date (phases 1-8)   Done on dev
@@ -86,8 +86,15 @@ Result so far: chat-api tests 29 passed (new: only the right secret makes a requ
              The Pi's config was tested in a sealed nginx container: unsigned/wrong/expired/
              wrong-issuer requests 403; every public path passes; "Back up now", readyz and metrics
              404; with the server unreachable the waker answers status.
-Waiting for: a Tailscale account and login for the Pi (make public-chat-setup), the Netlify secret,
-             then pushes (prod needs "Ship it" for the new chat-api and the history rule).
+Live:        https://aichatbotserver.netlify.app (Funnel https://qwenops.tail4e3f00.ts.net). After the
+             owner turned off Netlify's visitor login: make public-chat-test passed 16 of 16
+             (unsigned and wrong signatures 403, unlisted paths and "Back up now" 404, Pulse,
+             Capacity, Backups, Pipeline, themes, theme.json, chat through the Funnel and through
+             Netlify). A full 512-token reply through Netlify took 21 s and arrived complete; the
+             visitor's chat was saved (stored: true). Public pipeline logs: no private IPs or
+             service names, security-scan log withheld. Headers: CSP, X-Frame-Options DENY, HSTS.
+             The first public colour deploy failed on an all-digit commit id (Issue 49), fixed.
+Issues:      Issues 49-50 in docs/capacity-journal-issues.md
 
 16. Be a Dev: each environment changes its own colour
 
