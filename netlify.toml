@@ -8,6 +8,8 @@
 
 [build.environment]
   PYTHON_VERSION = "3.13"
+  # "on" once the chat routes below exist (scripts/21-public-chat.sh netlify): chat then works for real.
+  PUBLIC_CHAT = "off"
 
 # The same security headers nginx sends at home (app-ui/nginx/default.conf), plus HSTS.
 [[headers]]

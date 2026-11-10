@@ -1459,7 +1459,8 @@
     <li class="done"><b>7</b>Sleep when idle and Wake-on-LAN through a Raspberry Pi gateway (no SQS needed); server-down alerts from the Pi</li>
     <li class="done"><b>8</b>Live Jenkins runs and logs on the Pipeline page; Be a Dev starts real <code>theme-deploy</code> runs on the environment it was picked on</li>
     <li class="done"><b>9</b>Public showcase on Netlify: a static copy built from GitHub on every push, with a snapshot of prod's dashboards; no request reaches the home server</li>
-    <li class="next"><b>next</b>Secrets from a secrets manager, image signing (cosign + admission check), alerts for crash-looping pods, a gigabit cable for the server; maybe a live chat for the public site through a tunnel</li>
+    <li class="next"><b>9b</b>Live chat on the public site: Netlify signs each request → Tailscale Funnel → the Pi checks the signature, allows only chat, limits each visitor → prod chat-api (public visitors are guests with short replies)</li>
+    <li class="next"><b>next</b>Secrets from a secrets manager, image signing (cosign + admission check), alerts for crash-looping pods, a gigabit cable for the server</li>
   </ol>
 </section>
 

@@ -40,6 +40,13 @@ CHAT_SLOTS = int(os.getenv("CHAT_SLOTS", "1"))
 CHAT_QUEUE = int(os.getenv("CHAT_QUEUE", "4"))
 CHAT_QUEUE_WAIT_SECONDS = float(os.getenv("CHAT_QUEUE_WAIT_SECONDS", "30"))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+# Public chat (Phase 9b): visitors of the Netlify site reach prod through the Raspberry Pi (Tailscale
+# Funnel). The Pi adds X-QwenOps-Edge with this secret plus the visitor's address. Only then is the
+# request treated as public: stricter limits, always guest mode, shorter replies. Empty = no public chat.
+EDGE_SECRET = _read_secret("EDGE_SECRET")
+PUBLIC_RATE_LIMIT_PER_MIN = int(os.getenv("PUBLIC_RATE_LIMIT_PER_MIN", "4"))      # per visitor
+PUBLIC_CHATS_PER_MIN = int(os.getenv("PUBLIC_CHATS_PER_MIN", "30"))               # all public visitors
+PUBLIC_MAX_TOKENS = int(os.getenv("PUBLIC_MAX_TOKENS", "256"))   # keeps replies inside Netlify's proxy limit
 
 ALLOWED_THEMES = ["teal", "indigo", "rose", "amber", "emerald", "slate"]
 

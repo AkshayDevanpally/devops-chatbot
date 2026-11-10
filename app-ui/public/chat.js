@@ -32,7 +32,7 @@ function showcaseChat() {
 }
 
 async function boot() {
-  if (SHOWCASE) return showcaseChat();
+  if (SHOWCASE && !SHOWCASE.liveChat) return showcaseChat();
   try { await api("/api/wake", { method: "POST" }); } catch { /* keep polling */ }
   for (let i = 0; i < 180; i++) {
     let state = "waking";
@@ -49,6 +49,8 @@ async function startChat() {
   document.getElementById("boot").hidden = true;
   document.getElementById("chat").hidden = false;
   const h = await (await api("/api/history")).json();
+  if (h.public) document.getElementById("guest").textContent =
+    "You're chatting from the public site: a small model on a home server answers, and nothing is saved. Replies are kept short.";
   document.getElementById(h.stored ? "saved" : "guest").style.display = "block";
   h.chats.forEach(c => { bubble("user", c.prompt); bubble("bot", c.reply); });
 }

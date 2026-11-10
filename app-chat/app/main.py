@@ -1,6 +1,7 @@
 """Chat API: streams replies from a small Qwen model (via Ollama) and stores history
 for the first 50 users, keeping each user's newest 15 chats."""
 import asyncio
+import hmac
 import json
 import logging
 import time
@@ -11,7 +12,7 @@ from contextlib import asynccontextmanager
 import httpx
 import psycopg
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from itsdangerous import BadSignature, URLSafeSerializer
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 from psycopg_pool import AsyncConnectionPool
@@ -136,6 +137,33 @@ def rate_limited(key: str, limit: int, window: float = 60.0) -> bool:
     return False
 
 
+# ---------- public visitors (Phase 9b: Netlify → Tailscale Funnel → Pi → here) ----------
+def public_client(request: Request) -> str | None:
+    """The visitor's address if the Pi vouches for this request (edge secret), else None.
+    Without the secret the X-QwenOps-* headers are ignored, so nobody can fake being public or
+    pick their own address to dodge the limits."""
+    edge = request.headers.get("x-qwenops-edge", "")
+    if config.EDGE_SECRET and edge and hmac.compare_digest(edge.encode(), config.EDGE_SECRET.encode()):
+        return request.headers.get("x-qwenops-client", "")[:64] or "unknown"
+    return None
+
+
+PUBLIC_PATHS = {"/api/chat", "/api/history", "/api/status", "/api/wake"}
+
+
+@app.middleware("http")
+async def public_only_chat(request: Request, call_next):
+    """The Pi forwards only the chat paths; refuse the rest here too, in case that ever changes."""
+    if request.url.path not in PUBLIC_PATHS and public_client(request) is not None:
+        return JSONResponse({"detail": "not available on the public site"}, status_code=404)
+    return await call_next(request)
+
+
+def client_key(request: Request) -> str:
+    who = public_client(request)
+    return f"public:{who}" if who is not None else (request.client.host if request.client else "unknown")
+
+
 # ---------- identity: signed anonymous cookie ----------
 def get_or_set_uid(request: Request, response: Response) -> str:
     raw = request.cookies.get("uid")
@@ -216,7 +244,7 @@ async def readyz():
 # ---------- wake + status (Phase 7 swaps the stub for SQS) ----------
 @app.post("/api/wake")
 async def wake(request: Request):
-    if rate_limited(f"wake:{request.client.host}", 3):
+    if rate_limited(f"wake:{client_key(request)}", 3):
         raise HTTPException(429, "too many wake requests")
     jlog("wake_requested")
     # Locally the hardware is already on. In Phase 7 this publishes to SQS for the Pi relay.
@@ -241,6 +269,8 @@ async def status():
 @app.get("/api/history")
 async def history(request: Request, response: Response):
     uid = get_or_set_uid(request, response)
+    if public_client(request) is not None:   # public visitors are always guests: nothing stored
+        return {"stored": False, "chats": [], "public": True}
     async with pool.connection() as conn:
         stored = await (await conn.execute("SELECT 1 FROM users WHERE id=%s", (uid,))).fetchone()
         rows = await (await conn.execute(
@@ -301,9 +331,11 @@ BUSY = "Busy right now: lots of people are chatting. Try again in a moment."
 @app.post("/api/chat")
 async def chat(body: ChatIn, request: Request, response: Response):
     uid = get_or_set_uid(request, response)
-    if rate_limited(f"chat:{uid}", config.RATE_LIMIT_PER_MIN) or rate_limited(
-        f"chatip:{request.client.host}", config.RATE_LIMIT_PER_MIN * 3
-    ):
+    public = public_client(request) is not None
+    per_visitor = config.PUBLIC_RATE_LIMIT_PER_MIN if public else config.RATE_LIMIT_PER_MIN
+    if rate_limited(f"chat:{uid}", per_visitor) or rate_limited(
+        f"chatip:{client_key(request)}", per_visitor * (2 if public else 3)
+    ) or (public and rate_limited("chat:public-all", config.PUBLIC_CHATS_PER_MIN)):
         CHAT_REQUESTS.labels("rate_limited").inc()
         raise HTTPException(429, "slow down")
 
@@ -311,7 +343,10 @@ async def chat(body: ChatIn, request: Request, response: Response):
         CHAT_REQUESTS.labels("busy").inc()
         raise HTTPException(503, BUSY, headers={"Retry-After": "15"})
 
-    stored = await ensure_user(uid)
+    # Public visitors never take one of the 50 places with saved history.
+    stored = False if public else await ensure_user(uid)
+    if public:
+        jlog("public_chat")
     messages = [{"role": "system", "content": "You are a concise, friendly assistant."}]
     if stored:
         async with pool.connection() as conn:
@@ -341,7 +376,7 @@ async def chat(body: ChatIn, request: Request, response: Response):
                 async with http.stream(
                     "POST", "/api/chat",
                     json={"model": config.MODEL, "messages": messages, "stream": True,
-                          "options": {"num_predict": 512}},
+                          "options": {"num_predict": config.PUBLIC_MAX_TOKENS if public else 512}},
                 ) as r:
                     r.raise_for_status()
                     async for line in r.aiter_lines():

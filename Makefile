@@ -1,4 +1,4 @@
-.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore backup-offsite-setup backup-offsite-now backup-admin-password db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset alerts alerts-topic alerts-test alerts-status lan-share-ca sleep-setup sleep-status sleep-now stay-awake allow-sleep wol-test alert-test pi-gateway pi-test pi-simulate pi-status pi-quiet showcase-snapshot showcase-build showcase-preview
+.PHONY: help compose test k3s apparmor registry platform build deploy-dev deploy-qa deploy-prod tls trust-ca jenkins jenkins-agent jenkins-password verify logs clean backups backup-now backup-status backup-test backup-download db-restore backup-offsite-setup backup-offsite-now backup-admin-password db-tls tunnel-up tunnel-test tunnel-down tunnel-status burst-prepare burst-up burst-ready burst-test burst-down burst-status guardrails-up guardrails-test guardrails-status guardrails-reset alerts alerts-topic alerts-test alerts-status lan-share-ca sleep-setup sleep-status sleep-now stay-awake allow-sleep wol-test alert-test pi-gateway pi-test pi-simulate pi-status pi-quiet showcase-snapshot showcase-build showcase-preview public-chat-setup public-chat-netlify public-chat-secret public-chat-test public-chat-status public-chat-off
 
 # k3s's kubectl reads the root-only /etc/rancher/k3s/k3s.yaml unless told otherwise.
 # Use the user copy that `make k3s` puts in ~/.kube/config.
@@ -183,6 +183,24 @@ showcase-build: ## Phase 9: build dist/ exactly as Netlify does
 
 showcase-preview: ## Phase 9: build and serve the public showcase on http://127.0.0.1:8088
 	./scripts/20-showcase.sh preview
+
+public-chat-setup: ## Phase 9b: public chat through the Pi (Tailscale Funnel); Pi's sudo password, Tailscale login once
+	./scripts/21-public-chat.sh setup
+
+public-chat-netlify: ## Phase 9b: write the chat routes into netlify.toml (after setup), then commit and push
+	./scripts/21-public-chat.sh netlify
+
+public-chat-secret: ## Phase 9b: print the value for Netlify's QWENOPS_PROXY_SECRET (run it yourself)
+	@./scripts/21-public-chat.sh netlify-secret
+
+public-chat-test: ## Phase 9b: checks through the Funnel (SITE=https://x.netlify.app also checks through Netlify)
+	./scripts/21-public-chat.sh test $(SITE)
+
+public-chat-status: ## Phase 9b: Funnel address and state on the Pi
+	./scripts/21-public-chat.sh status
+
+public-chat-off: ## Phase 9b: close public chat (Funnel off); public-chat-setup opens it again
+	./scripts/21-public-chat.sh off
 
 verify:        ## functional + security checks (ENV=dev|qa|prod)
 	./scripts/07-verify.sh $(or $(ENV),dev)
