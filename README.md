@@ -4,6 +4,9 @@ A small Qwen chatbot (Ollama, `qwen2.5:0.5b`) with a FastAPI backend, a static U
 (latest 50 users, last 15 chats each; a new user replaces the first one), deployed to **k3s** in **dev / qa / prod** namespaces with
 security controls on by default. Sized for **16 GB RAM / 4 cores**.
 
+**Public site:** https://aichatbotserver.netlify.app — the same app, served by Netlify and answered by the home
+server through the Raspberry Pi (Tailscale Funnel). See *Public site on Netlify (Phase 9)*.
+
 ```
 browser ─HTTPS─► Traefik ingress (k3s, cert from cert-manager) ──► ui (nginx)            namespace chatbot-<env>
                               └─/api─► chat-api (FastAPI) ──► ollama   (namespace ai)
@@ -22,7 +25,8 @@ browser ─HTTPS─► Traefik ingress (k3s, cert from cert-manager) ──► u
 | `Jenkinsfile` | CI/CD pipeline: checkout → build → test → scan → SBOM + push → dev → qa → approved prod |
 | `ci/jenkins/`, `k8s/ci/` | Jenkins controller image (plugins baked in) and its k3s manifests + deployer RBAC |
 | `ci/theme-deploy.Jenkinsfile`, `scripts/19-theme.sh` | The "Be a Dev" colour deploy job (validate → deploy dev → verify) |
-| `netlify.toml`, `scripts/netlify-build.py`, `app-ui/showcase/` | Public showcase on Netlify (Phase 9): build, headers, dashboard snapshot |
+| `netlify.toml`, `scripts/netlify-build.py`, `app-ui/showcase/` | Public site on Netlify (Phase 9): build, headers, signed routes to the Pi, snapshot for the static mode |
+| `pi/public-setup.sh`, `pi/public/`, `scripts/21-public-chat.sh` | Public site backend on the Pi (Phase 9b): Tailscale Funnel, Netlify signature check, public paths only |
 | `ci/pipeline-events/` | Small read-mostly bridge: the Pipeline page's view of Jenkins (runs, stages, redacted logs) |
 | `k8s/tls/` | cert-manager namespace + policies, local CA, Traefik HTTP→HTTPS redirect |
 | `k8s/platform/` | Namespaces (PSA restricted), quotas, default-deny network policies, Ollama, Postgres, Prometheus |
@@ -186,6 +190,7 @@ browser ──► chat-api ──► pipeline-events (ns ci) ──► Jenkins
   (~40 s). Limits: one change per visitor every 5 minutes, and one colour deploy at a time (409 while one is
   queued or running). Pipeline deploys keep each environment's chosen colour (`scripts/06-deploy.sh` reads the
   ConfigMap).
+  On the public site (Netlify) Be a Dev changes prod's colour, at most 6 times an hour in total.
 - Security: chat-api has no Jenkins access; it only talks to pipeline-events, which only chat-api can reach and
   which can only reach Jenkins (NetworkPolicies). Job names, build and stage numbers are checked before they
   are passed on.
@@ -244,63 +249,80 @@ kubectl -n chatbot-dev describe quota    # how full each environment is
 helm history chatbot-prod -n chatbot-prod && helm rollback chatbot-prod <rev> -n chatbot-prod
 ./scripts/19-theme.sh show               # each environment's "Be a Dev" colour
 kubectl -n ci logs deploy/pipeline-events  # the Pipeline page's link to Jenkins
+make public-chat-test SITE=https://aichatbotserver.netlify.app   # is the public site healthy?
 ```
 
-## Public showcase on Netlify (Phase 9)
+## Public site on Netlify (Phase 9)
 
-A static copy of the site for the public, built by Netlify from GitHub on every push to `master`
-(`netlify.toml`). **No request reaches the home server**: nothing at home is exposed.
+**Live at https://aichatbotserver.netlify.app** (since 10 November 2026). Netlify serves the pages, built from GitHub
+on every push to `master`; every `/api/...` request goes to the home server through the Raspberry Pi.
+Nothing on the router is opened.
 
-- Architecture, Journal and the page designs work fully. Pulse, Capacity and the Backups panel show a **snapshot**
-  of prod's data, labelled with its date. The Pipeline page plays its demo build. Chat and Be a Dev explain that
-  they need the home network. A line under the header on every page says it's a showcase.
-- How: `scripts/netlify-build.py` copies `app-ui/public` to `dist/`, builds the Journal data from `docs/` (with the
-  usual redaction, now also MAC addresses and home paths), adds `app-ui/showcase/`, and writes a `config.js` with
-  `window.SHOWCASE` set. In that mode `api()` in `common.js` never calls an API. The same security headers as at home.
-- **One-time setup on netlify.com:** Add new site → Import an existing project → GitHub → pick this repo (give the
-  Netlify app access to it) → branch `master`; the build settings come from `netlify.toml` → Deploy.
+```
+visitor ─► Netlify (pages; /api/... and /theme.json are proxied, each request signed with QWENOPS_PROXY_SECRET)
+        ─► Tailscale Funnel  https://qwenops.tail4e3f00.ts.net  (public HTTPS, the Pi dials out to Tailscale)
+        ─► Raspberry Pi, nginx 127.0.0.1:8090: Netlify's signature checked (else 403) · public paths only (else 404)
+                                                 · flood limits per visitor · server asleep → the waker wakes it
+        ─► prod chat-api as chatbot.local (home CA checked), with the edge secret and the visitor's address
+```
+
+**What visitors can do (the same as at home):**
+- **Chat** with saved history: last 15 chats each, the latest 50 visitors, 10 messages a minute, full replies
+  (512 tokens; a full one took 21 s through Netlify, inside its ~26 s proxy limit).
+- **Pulse** and **Capacity**, live; the **Backups** panel, view only.
+- **Pipeline** page with live runs and logs.
+- **Be a Dev**: changes **prod's** colour (the public site shows prod's live colour).
+
+**What's different from home:**
+- "Back up now" is home only: the Pi and chat-api both refuse `/api/backups/run` (404).
+- At most **6 colour deploys an hour** from the public site in total (plus the usual 1 per visitor every 5 min).
+- Public **pipeline logs are trimmed**: private IPs, MAC addresses, internal service names and home paths blanked,
+  and the security-scan log isn't shown.
+- Rate limits use the visitor's real address (passed by the Pi), not the Pi's.
+
+**History rule (for everyone, it's one database):** when a 51st user arrives, the **first user created** is removed
+with their chats. A flood of new visitors can therefore remove everyone's history, the family's included. This was
+chosen on 10 November 2026 with that risk known.
+
+**How it's protected:**
+- Only requests signed by this Netlify site get past the Pi (HS256 signature, issuer `netlify`, not expired).
+  Crawlers found the Funnel address within minutes and got 403.
+- chat-api treats a request as public only when it carries the edge secret (`EDGE_SECRET`, from the Pi); without
+  it the visitor-address header is ignored.
+- The Pi checks prod's certificate against the home CA; the edge secret lives only in a root-only nginx file.
+- Same security headers as at home (CSP, no framing, nosniff) plus HSTS.
+
+**Commands:**
 
 ```bash
-make showcase-snapshot   # save prod's Pulse, Capacity and Backups data into app-ui/showcase/ (commit it to publish)
-make showcase-build      # build dist/ exactly as Netlify does
-make showcase-preview    # build and serve it on http://127.0.0.1:8088
-```
-
-### The public site goes live (Phase 9b)
-
-```
-visitor → Netlify site → /api/... and /theme.json   (Netlify signs each request with QWENOPS_PROXY_SECRET)
-        → Tailscale Funnel (public HTTPS, opened from home: no router change)
-        → Raspberry Pi, nginx 127.0.0.1:8090: checks Netlify's signature, public paths only, flood limits
-        → prod chat-api as chatbot.local, with the edge secret and the visitor's address
-```
-
-- **What the public gets, as at home:** chat with saved history (last 15 chats, latest 50 visitors), Pulse,
-  Capacity, the Backups panel (view only), the Pipeline page with logs, and Be a Dev (changes **prod's** colour; the
-  public site shows prod's live colour). Same limits as at home (10 messages a minute per visitor).
-- **Different from home:** "Back up now" is refused (Pi and chat-api); at most 6 colour deploys an hour from the
-  public site in total; pipeline logs also blank private IPs, internal host names and home paths, and the
-  security-scan log isn't shown. Per-visitor limits use the visitor's real address (passed by the Pi).
-- **50 users, then first in, first out:** a new user replaces the first user created, and that user's chats are
-  deleted (at home too: it's one database). A flood of new visitors can therefore remove everyone's history.
-- **Asleep?** The Pi answers `/api/status` and `/api/wake` and wakes the server. Other requests get "waking up,
-  try again" until it's back. Public visitors can wake the server.
-- Anyone calling the Funnel address directly is refused (403): only requests signed by your Netlify site get in.
-  chat-api trusts the visitor address only from requests carrying the edge secret (`EDGE_SECRET`).
-
-**Turning it on (once):**
-1. Create a free account at tailscale.com.
-2. `make public-chat-setup`: makes the secrets, sets up the Pi (asks for the Pi's sudo password, shows a Tailscale
-   login link for the Pi and, the first time, a link to allow HTTPS/Funnel) and prints the public address.
-3. `make public-chat-netlify`: writes the routes into `netlify.toml` and sets `PUBLIC_LIVE = "on"`; commit and push.
-4. In Netlify: Site configuration → Environment variables → add `QWENOPS_PROXY_SECRET` (all scopes) with the value from
-   `make public-chat-secret` (run it yourself), then redeploy.
-5. `make public-chat-test SITE=https://<your-site>.netlify.app`.
-
-```bash
+make public-chat-test SITE=https://aichatbotserver.netlify.app   # 16 checks: through the Funnel and through Netlify
 make public-chat-status   # Funnel address and state on the Pi
-make public-chat-off      # take the public site offline at once (Funnel off); it falls back to errors, not data
+make public-chat-off      # take the public site's data offline at once (Funnel off); pages stay up, show errors
+make public-chat-setup    # set the Pi up again / turn Funnel back on (Pi's sudo password)
+make public-chat-netlify  # rewrite the routes in netlify.toml (after the Funnel address changes), then commit + push
+make public-chat-secret   # the value for Netlify's QWENOPS_PROXY_SECRET (run it yourself; it's a secret)
+make showcase-preview     # build the site locally as Netlify does, on http://127.0.0.1:8088
 ```
+
+**Setting it up from scratch (done once):**
+1. Netlify: Add new site → Import an existing project → GitHub → this repo, branch `master` (settings come from
+   `netlify.toml`). **Site configuration → Access & security → Visitor access: no protection**, or every request
+   gets a Netlify login page (Issue 50).
+2. Free Tailscale account; `make public-chat-setup` (Pi's sudo password; approve the Pi and, the first time, Funnel).
+3. `make public-chat-netlify`, commit, push.
+4. Netlify: Environment variables → `QWENOPS_PROXY_SECRET` (all scopes) = output of `make public-chat-secret`; redeploy.
+5. `make public-chat-test SITE=https://<site>.netlify.app`.
+
+**Static mode:** with `PUBLIC_LIVE = "off"` in `netlify.toml` the site becomes a static showcase with no backend:
+Pulse, Capacity and Backups show a snapshot (`make showcase-snapshot`, commit it), the Pipeline page plays a demo,
+chat and Be a Dev explain they need the home network.
+
+**Things to know:**
+- After changing `ci/pipeline-events/`, update its ConfigMap and restart it (or `make jenkins`): the pipeline
+  doesn't deploy it.
+- Image tags go to Helm with `--set-string`: an all-digit commit id stored as a number broke colour deploys (Issue 49).
+- Public visitors keep the server awake more, share its 4 cores with you, and their chats are stored at home and in
+  the S3 backups.
 
 ## Overload protection
 
@@ -476,6 +498,7 @@ To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` 
 - **Secrets:** random, generated into the cluster, never in Git or on disk; k3s encrypts them at rest.
 - **TLS:** cert-manager with a private CA (ECDSA P-256), HTTP→HTTPS redirect, HSTS, `Secure` cookies; cert-manager runs in its own PSA-restricted, default-deny namespace with no internet access.
 - **App:** input validation, per-user/IP rate limits, signed HttpOnly cookies, CSP and other headers, metrics on a non-public port, JSON logs without message contents.
+- **Public site:** reachable only through Netlify's signed proxy (the Pi refuses unsigned requests), public paths only, "Back up now" home only, trimmed pipeline logs, colour deploys capped; nothing opened on the router (Tailscale Funnel dials out).
 
 ## Notes / next phases
 
@@ -507,6 +530,8 @@ To try a bigger model: change `MODEL` in `k8s/platform/30-ollama.yaml`, `model` 
 
 - **Ollama version:** pinned to `ollama/ollama:0.30.10`. Check https://github.com/ollama/ollama/releases and bump it in `k8s/platform/30-ollama.yaml` and `.env`.
 - **TLS:** done in Phase 3.4 with a local CA. HSTS is 1 day (`tls.hstsSeconds`); raise it once certificates come from a public CA (e.g. Let's Encrypt in AWS).
-- **Pipeline page and Be a Dev (Phase 8, done 2026-11-09):** the Pipeline page shows live Jenkins runs and logs, and the colour page starts real `theme-deploy` runs on dev (see *Live Pipeline page and "Be a Dev"*). Still open: image signing (cosign + an admission check) as a follow-up to the SBOM step.
+- **Pipeline page and Be a Dev (Phase 8, done 2026-11-09):** the Pipeline page shows live Jenkins runs and logs, and each environment's colour page starts real `theme-deploy` runs on that environment (see *Live Pipeline page and "Be a Dev"*). Still open: image signing (cosign + an admission check) as a follow-up to the SBOM step.
+- **Public site (Phase 9, live 2026-11-10):** https://aichatbotserver.netlify.app, answered by the home server through the Pi and Tailscale Funnel (see *Public site on Netlify*).
+- **Next:** secrets from a secrets manager, image signing, alerts for crash-looping pods, a gigabit cable for the server (Issue 41).
 - **Wake-on-LAN (Phase 7, done):** the Raspberry Pi gateway answers `/api/wake` and `/api/status` while the server
   sleeps and sends the magic packet on the home network; no AWS (SQS) part was needed. See *Sleep and wake*.

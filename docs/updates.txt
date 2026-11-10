@@ -10,9 +10,10 @@ SUMMARY
 
  #   Date          Update                                              Status
  --  ------------  --------------------------------------------------  -------------------
- 17  10 Nov 2026   Phase 9b: the public site goes live (Pi, Funnel)    Live, 16 of 16 checks
+ 18  10 Nov 2026   Public site live: aichatbotserver.netlify.app       Done, 16 of 16 checks
+ 17  10 Nov 2026   Phase 9b: the public site goes live (Pi, Funnel)    Done (details in 18)
  16  10 Nov 2026   Be a Dev: each environment changes its own colour   Done, tested qa/prod
- 15  9 Nov 2026    Phase 9: public showcase on Netlify                 Built; Netlify link pending
+ 15  9 Nov 2026    Phase 9: public showcase on Netlify                 Done; now live (17, 18)
  14  9 Nov 2026    Architecture page brought up to date (phases 1-8)   Done on dev
  13  9 Nov 2026    Phase 8: live Pipeline page, real Be a Dev deploys  Done, checks passed
  12  9 Nov 2026    Server-down alerts from the Pi                      Done, checks passed
@@ -31,6 +32,49 @@ SUMMARY
 
 DETAILS
 -------
+
+18. Public site live: https://aichatbotserver.netlify.app
+
+Date:        10 November 2026
+Commands:    make public-chat-test SITE=https://aichatbotserver.netlify.app (16 checks),
+             make public-chat-status, make public-chat-off
+Why:         the end of Phase 9: the project is public, with the full home experience, and the
+             home router stays closed.
+
+What happened on the day, in order:
+1. Be a Dev made per environment (update 16), pushed, tested from qa's and prod's pages.
+2. Phase 9b built: Pi gateway behind Tailscale Funnel, Netlify signed proxy, public rules in
+   chat-api (update 17). The owner chose the full home experience for visitors (saved history,
+   Pulse, Capacity, Pipeline with logs, Be a Dev) after the problems were explained; "Back up
+   now" stays home-only, public colour deploys capped at 6 an hour, logs trimmed. History rule
+   changed for everyone: a 51st user replaces the first user created.
+3. Pushed and shipped to prod (build #26); pipeline-events updated by hand.
+4. The owner created a Tailscale account and ran make public-chat-setup: Funnel on at
+   https://qwenops.tail4e3f00.ts.net. Test through the Funnel: 12 of 12 (after two false
+   failures while the Funnel was starting, Issue 50).
+5. Netlify routes written (make public-chat-netlify, 13 signed routes, PUBLIC_LIVE = "on"),
+   pushed. The owner added QWENOPS_PROXY_SECRET in Netlify.
+6. Netlify's visitor login was on (every request a login redirect); the owner turned it off.
+7. Full test through Netlify: 16 of 16. A full 512-token reply took 21 s and arrived complete;
+   the public visitor's chat was saved; public logs trimmed; CSP, no framing and HSTS present.
+8. The first public colour deploy failed: an all-digit commit id (5151604) stored by Helm as a
+   number broke --reuse-values (Issue 49). Fixed (--set-string), pushed, and a public colour
+   deploy then passed all four stages (theme-deploy #12, prod).
+
+Where things are:
+- Netlify site: aichatbotserver; build settings, headers and routes in netlify.toml; secret
+  QWENOPS_PROXY_SECRET in Netlify's environment variables (also in secret public-chat).
+- Pi: nginx /etc/nginx/conf.d/qwenops-public.conf (root-only, holds the edge secret),
+  /etc/qwenops-gateway/public/ (signature check and Netlify secret), Tailscale with Funnel.
+- Cluster: secret public-chat (NETLIFY_SECRET, PUBLIC_URL) and EDGE_SECRET in chat-api-secrets,
+  both in chatbot-prod.
+
+To watch:
+- Netlify's Visitor access must stay off.
+- A flood of new visitors can remove everyone's history (first-in, first-out, as chosen).
+- One test visitor (with one chat) from these checks is in prod's history; it goes like any other.
+- Public traffic keeps the server awake more often.
+Issues:      Issues 49-50 in docs/capacity-journal-issues.md
 
 17. Phase 9b: the public site goes live, through the Raspberry Pi
 
@@ -170,7 +214,10 @@ Result:      dist/ builds (28 files); every page and data file served by a local
              all changed scripts pass node --check. The home site is unchanged (SHOWCASE is
              null there). Not checked in a browser: running a headless Chrome container was
              blocked by an automated permission check (see Issue 47).
-Next:        connect the repo on netlify.com (README, "Public showcase on Netlify").
+Next:        connect the repo on netlify.com (README, "Public site on Netlify").
+Later:       connected as https://aichatbotserver.netlify.app on 10 November and switched from this
+             static mode to live (PUBLIC_LIVE = "on", updates 17 and 18). The static mode stays
+             available: PUBLIC_LIVE = "off".
 Issues:      Issue 47 in docs/capacity-journal-issues.md
 
 14. Architecture page brought up to date
